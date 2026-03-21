@@ -22,7 +22,7 @@ from .modules.kit_manager import KitManagerModule
 from .modules.synth_editor import SynthEditorModule
 from .modules.batch_hub import BatchHubModule
 from .modules.backup_sync import BackupSyncModule
-from .modules.settings_module import SettingsModule
+from .modules.settings_module import SettingsModule, APP_VERSION
 
 
 MODULES = [
@@ -242,7 +242,7 @@ class MainWindow(QMainWindow):
         top_row.addWidget(self._collapse_btn)
         layout.addLayout(top_row)
 
-        self._sidebar_sub = QLabel("v1.0  •  Deluge Manager")
+        self._sidebar_sub = QLabel(f"v{APP_VERSION}  •  Deluge Manager")
         self._sidebar_sub.setObjectName("AppSubtitle")
         layout.addWidget(self._sidebar_sub)
 

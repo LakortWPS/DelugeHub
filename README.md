@@ -1,4 +1,4 @@
-# DelugeHub v1.0
+# DelugeHub v1.0.2
 
 **All-in-One Synthstrom Deluge SD-Card Manager**
 
@@ -56,6 +56,20 @@ delugyhub/
 │       ├── backup_sync.py
 │       └── settings_module.py
 ```
+
+## Changelog
+
+### v1.0.2
+- Fix: App-Version in der Sidebar wird jetzt dynamisch aus `APP_VERSION` geladen (war hardcoded `v1.0`)
+- Fix: XML-Parser ist jetzt robust gegen ungültige Steuerzeichen in Deluge-Dateien (`invalid token`)
+- Fix: XML-Parser behandelt jetzt "junk after document element" — Deluge paddet manche Dateien mit Null-Bytes nach dem Root-Tag
+
+### v1.0.1
+- Fix: `QLabel`-Hintergründe sind jetzt transparent — kein sichtbarer Kasten mehr hinter Texten auf Karten
+- Fix: `QPushButton` zeigt nach dem Klicken keinen gepunkteten Fokus-Rahmen mehr
+
+### v1.0.0
+- Erster Release
 
 ## Community
 - https://delugecommunity.com

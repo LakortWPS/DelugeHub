@@ -2,14 +2,57 @@
 DelugeHub — XML Parser
 Parses Deluge XML files (Songs, Kits, Synths) and extracts metadata + sample references.
 """
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 import logging
 
 from .models import Song, Kit, Synth, SampleRef
+from .file_ops import _read_xml
+
+# Matches characters that are illegal in XML 1.0
+_INVALID_XML_RE = re.compile(
+    r'[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]'
+)
 
 log = logging.getLogger(__name__)
+
+def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
+    """
+    Robustly parse a Deluge XML file:
+      1. Read with encoding detection (_read_xml handles UTF-8-BOM / Latin-1)
+      2. Strip invalid XML 1.0 characters (control chars the Deluge sometimes writes)
+      3. If 'junk after document element', truncate at the root closing tag
+         (Deluge occasionally pads files with null bytes after </root>)
+    Returns the root Element or None on failure.
+    """
+    try:
+        text, _ = _read_xml(file_path)
+    except Exception as e:
+        log.error(f"Cannot read {file_path}: {e}")
+        return None
+
+    # Strip characters illegal in XML 1.0
+    text = _INVALID_XML_RE.sub('', text)
+
+    try:
+        return ET.fromstring(text)
+    except ET.ParseError as e:
+        if 'junk after document element' in str(e):
+            # Find root tag name and truncate after its closing tag
+            m = re.match(r'\s*<([\w\-\.]+)', text)
+            if m:
+                close_tag = f'</{m.group(1)}>'
+                idx = text.rfind(close_tag)
+                if idx != -1:
+                    try:
+                        return ET.fromstring(text[:idx + len(close_tag)])
+                    except ET.ParseError:
+                        pass
+        log.error(f"Error parsing {file_path}: {e}")
+        return None
+
 
 SAMPLE_ATTRIBUTES = [
     "fileName",
@@ -126,8 +169,9 @@ def _parse_bpm(root: ET.Element) -> float:
 def parse_song(file_path: Path, sd_root: Path) -> Optional[Song]:
     """Parse a Deluge SONG XML file."""
     try:
-        tree = ET.parse(file_path)
-        root = tree.getroot()
+        root = _parse_xml_robust(file_path)
+        if root is None:
+            return None
 
         num = 4
         denom = 4
@@ -168,9 +212,6 @@ def parse_song(file_path: Path, sd_root: Path) -> Optional[Song]:
             track_count=track_count,
             sample_refs=sample_refs,
         )
-    except ET.ParseError as e:
-        log.error(f"XML parse error in {file_path}: {e}")
-        return None
     except Exception as e:
         log.error(f"Error parsing song {file_path}: {e}")
         return None
@@ -179,8 +220,9 @@ def parse_song(file_path: Path, sd_root: Path) -> Optional[Song]:
 def parse_kit(file_path: Path, sd_root: Path) -> Optional[Kit]:
     """Parse a Deluge KIT XML file."""
     try:
-        tree = ET.parse(file_path)
-        root = tree.getroot()
+        root = _parse_xml_robust(file_path)
+        if root is None:
+            return None
 
         # Count sound sources (pads)
         sounds = root.findall(".//sound") or root.findall(".//kitRow")
@@ -202,8 +244,9 @@ def parse_kit(file_path: Path, sd_root: Path) -> Optional[Kit]:
 def parse_synth(file_path: Path, sd_root: Path) -> Optional[Synth]:
     """Parse a Deluge SYNTH XML file."""
     try:
-        tree = ET.parse(file_path)
-        root = tree.getroot()
+        root = _parse_xml_robust(file_path)
+        if root is None:
+            return None
 
         osc1_type = "square"
         osc2_type = "square"
