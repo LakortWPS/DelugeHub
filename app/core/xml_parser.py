@@ -74,6 +74,31 @@ def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
                 return child
         return children[-1]
     except ET.ParseError as e:
+        # 5. Last resort: lxml with recover=True
+        #    Handles genuinely broken files (e.g. missing closing tags due to
+        #    Deluge firmware bugs like a missing </modKnobs>).
+        #    lxml elements share the same API as stdlib ET (findall, find,
+        #    get, iter, tag, text, attrib) so we return them directly —
+        #    no re-serialization needed.
+        try:
+            from lxml import etree as lxml_et
+            parser = lxml_et.XMLParser(recover=True, encoding='utf-8')
+            lxml_root = lxml_et.fromstring(
+                f'<_deluge_root_>{body}</_deluge_root_>'.encode('utf-8'),
+                parser=parser,
+            )
+            children_lxml = list(lxml_root)
+            if not children_lxml:
+                log.error(f"No elements found in {file_path} (lxml recovery)")
+                return None
+            for child in children_lxml:
+                if child.tag not in _DELUGE_METADATA_TAGS:
+                    log.warning(f"Recovered malformed XML via lxml: {file_path}")
+                    return child  # lxml element — compatible API, no conversion needed
+            log.warning(f"Recovered malformed XML via lxml: {file_path}")
+            return children_lxml[-1]
+        except Exception as lxml_err:
+            log.error(f"lxml recovery also failed for {file_path}: {lxml_err}")
         log.error(f"Error parsing {file_path}: {e}")
         return None
 

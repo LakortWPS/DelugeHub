@@ -1,4 +1,4 @@
-# DelugeHub v1.0.3
+# DelugeHub v1.0.4
 
 **All-in-One Synthstrom Deluge SD-Card Manager**
 
@@ -58,6 +58,10 @@ delugyhub/
 ```
 
 ## Changelog
+
+### v1.0.4
+- Fix: Kaputte Deluge XML-Dateien mit fehlenden Closing-Tags (z.B. `</modKnobs>`) werden jetzt via lxml automatisch repariert und geladen
+- Fix: Alle Tabellen-Spaltenheader vollständig sichtbar — Modus auf `Interactive` geändert und Breiten angepasst (Kit Manager, Song Manager, Synth Editor, Sample Manager, Backup & Sync)
 
 ### v1.0.3
 - Fix: XML-Parser erkennt jetzt das Deluge Firmware 2.0.0-beta Format korrekt — Dateien mit `<firmwareVersion>` und `<earliestCompatibleFirmware>` vor dem eigentlichen Content-Element werden jetzt fehlerfrei geparst
