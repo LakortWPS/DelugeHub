@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from pathlib import Path
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 
 class SettingsModule(QWidget):
