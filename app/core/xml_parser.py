@@ -18,14 +18,33 @@ _INVALID_XML_RE = re.compile(
 
 log = logging.getLogger(__name__)
 
+_DELUGE_METADATA_TAGS = {'firmwareVersion', 'earliestCompatibleFirmware'}
+
+# Matches unescaped '&' that is not part of a valid XML entity reference
+_BARE_AMP_RE = re.compile(r'&(?!(?:amp|lt|gt|apos|quot|#\d+|#x[\da-fA-F]+);)')
+
+
 def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
     """
-    Robustly parse a Deluge XML file:
-      1. Read with encoding detection (_read_xml handles UTF-8-BOM / Latin-1)
-      2. Strip invalid XML 1.0 characters (control chars the Deluge sometimes writes)
-      3. If 'junk after document element', truncate at the root closing tag
-         (Deluge occasionally pads files with null bytes after </root>)
-    Returns the root Element or None on failure.
+    Robustly parse a Deluge XML file.
+
+    Handles all known Deluge firmware quirks:
+
+    1. Newer firmware (2.0.0-beta+) writes multiple top-level elements before
+       the actual content element, e.g.:
+           <?xml version="1.0" encoding="UTF-8"?>
+           <firmwareVersion>2.0.0-beta</firmwareVersion>
+           <earliestCompatibleFirmware>2.0.0-beta</earliestCompatibleFirmware>
+           <sound>...</sound>
+       Fix: wrap body in a synthetic root, then find the actual content element.
+
+    2. Some files contain invalid XML 1.0 control characters.
+       Fix: strip with regex before parsing.
+
+    3. Some files contain unescaped '&' in attribute values or text content.
+       Fix: escape bare '&' to '&amp;'.
+
+    Returns the content Element (e.g. <sound>, <kit>, <song>) or None on failure.
     """
     try:
         text, _ = _read_xml(file_path)
@@ -33,23 +52,28 @@ def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
         log.error(f"Cannot read {file_path}: {e}")
         return None
 
-    # Strip characters illegal in XML 1.0
+    # 1. Strip invalid XML 1.0 characters
     text = _INVALID_XML_RE.sub('', text)
 
+    # 2. Escape bare '&'
+    text = _BARE_AMP_RE.sub('&amp;', text)
+
+    # 3. Strip XML declaration so we can wrap in a synthetic root
+    body = re.sub(r'<\?xml[^?]*\?>\s*', '', text, count=1)
+
+    # 4. Wrap in synthetic root to handle multiple top-level elements
     try:
-        return ET.fromstring(text)
+        wrapper = ET.fromstring(f'<_deluge_root_>{body}</_deluge_root_>')
+        children = list(wrapper)
+        if not children:
+            log.error(f"No elements found in {file_path}")
+            return None
+        # Return the first non-metadata child (the actual content element)
+        for child in children:
+            if child.tag not in _DELUGE_METADATA_TAGS:
+                return child
+        return children[-1]
     except ET.ParseError as e:
-        if 'junk after document element' in str(e):
-            # Find root tag name and truncate after its closing tag
-            m = re.match(r'\s*<([\w\-\.]+)', text)
-            if m:
-                close_tag = f'</{m.group(1)}>'
-                idx = text.rfind(close_tag)
-                if idx != -1:
-                    try:
-                        return ET.fromstring(text[:idx + len(close_tag)])
-                    except ET.ParseError:
-                        pass
         log.error(f"Error parsing {file_path}: {e}")
         return None
 

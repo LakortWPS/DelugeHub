@@ -1,4 +1,4 @@
-# DelugeHub v1.0.2
+# DelugeHub v1.0.3
 
 **All-in-One Synthstrom Deluge SD-Card Manager**
 
@@ -58,6 +58,11 @@ delugyhub/
 ```
 
 ## Changelog
+
+### v1.0.3
+- Fix: XML-Parser erkennt jetzt das Deluge Firmware 2.0.0-beta Format korrekt — Dateien mit `<firmwareVersion>` und `<earliestCompatibleFirmware>` vor dem eigentlichen Content-Element werden jetzt fehlerfrei geparst
+- Fix: Unescapte `&`-Zeichen in Deluge XML-Dateien werden automatisch zu `&amp;` korrigiert (`invalid token` Fehler)
+- Fix: Deprecated `Qt.AA_UseHighDpiPixmaps` Warning beim Start entfernt (in PySide6 6.x standardmäßig aktiv)
 
 ### v1.0.2
 - Fix: App-Version in der Sidebar wird jetzt dynamisch aus `APP_VERSION` geladen (war hardcoded `v1.0`)

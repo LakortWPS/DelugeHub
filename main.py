@@ -21,7 +21,8 @@ def main():
     app.setApplicationName("DelugeHub")
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("DelugeHub")
-    app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    # AA_UseHighDpiPixmaps is enabled by default in PySide6 6.x and deprecated
+    # — no need to set it manually.
 
     window = MainWindow()
     window.show()
