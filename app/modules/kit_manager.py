@@ -1,0 +1,440 @@
+"""
+DelugeHub — Kit Manager Module
+Browse kits, view pad assignments, re-assign samples, volume normalize.
+"""
+import shutil
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
+    QAbstractItemView, QFileDialog, QInputDialog, QMessageBox,
+    QLineEdit, QSplitter, QGridLayout, QScrollArea, QSizePolicy
+)
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
+
+from ..core.models import SDCardIndex, Kit
+
+
+class PadWidget(QFrame):
+    """A single pad cell in the kit grid."""
+    clicked = Signal(int)
+
+    def __init__(self, pad_number: int):
+        super().__init__()
+        self._pad_number = pad_number
+        self.setObjectName("Card")
+        self.setFixedSize(88, 72)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
+
+        num_lbl = QLabel(str(pad_number + 1))
+        num_lbl.setAlignment(Qt.AlignRight)
+        num_lbl.setStyleSheet("color: #555577; font-size: 10px;")
+
+        self._name_lbl = QLabel("—")
+        self._name_lbl.setAlignment(Qt.AlignCenter)
+        self._name_lbl.setWordWrap(True)
+        self._name_lbl.setStyleSheet("font-size: 10px; color: #AAAAAA;")
+
+        layout.addWidget(num_lbl)
+        layout.addWidget(self._name_lbl, 1)
+
+    def set_sample(self, name: str, has_file: bool = True):
+        short = name[:10] + "…" if len(name) > 10 else name
+        self._name_lbl.setText(short)
+        self._name_lbl.setToolTip(name)
+        if has_file:
+            self.setObjectName("CardAccent")
+        else:
+            self.setObjectName("CardError")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self._pad_number)
+        super().mousePressEvent(event)
+
+
+class KitManagerModule(QWidget):
+    request_rescan = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._index: Optional[SDCardIndex] = None
+        self._kits: list[Kit] = []
+        self._current_kit: Optional[Kit] = None
+        self._pads: list[PadWidget] = []
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 24, 28, 16)
+        root.setSpacing(0)
+
+        hdr = QHBoxLayout()
+        col = QVBoxLayout()
+        col.setSpacing(4)
+        col.addWidget(self._lbl("🥁  Kit Manager", "PageTitle"))
+        col.addWidget(self._lbl("Kits durchsuchen, Pad-Zuweisungen bearbeiten, Volumes normalisieren", "PageSubtitle"))
+        hdr.addLayout(col)
+        hdr.addStretch()
+
+        self._import_btn = QPushButton("⬇  Kit importieren")
+        self._import_btn.clicked.connect(self._import_kit)
+        self._import_btn.setFixedHeight(36)
+        hdr.addWidget(self._import_btn)
+        root.addLayout(hdr)
+        root.addSpacing(14)
+
+        # Toolbar
+        tb = QFrame()
+        tb.setObjectName("Card")
+        tb_layout = QHBoxLayout(tb)
+        tb_layout.setContentsMargins(12, 8, 12, 8)
+        tb_layout.setSpacing(8)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Kits suchen…")
+        self._search.textChanged.connect(self._filter)
+
+        self._rename_btn = QPushButton("✏  Umbenennen")
+        self._rename_btn.setObjectName("SecondaryButton")
+        self._rename_btn.clicked.connect(self._rename_selected)
+        self._rename_btn.setEnabled(False)
+
+        self._dupe_btn = QPushButton("📋  Duplizieren")
+        self._dupe_btn.setObjectName("SecondaryButton")
+        self._dupe_btn.clicked.connect(self._duplicate_selected)
+        self._dupe_btn.setEnabled(False)
+
+        self._norm_btn = QPushButton("🔊  Volumes normalisieren")
+        self._norm_btn.setToolTip("Alle Pad-Volumes auf gleichen Wert setzen (Batch verfügbar)")
+        self._norm_btn.clicked.connect(self._normalize_volumes)
+        self._norm_btn.setEnabled(False)
+
+        self._delete_btn = QPushButton("🗑  Löschen")
+        self._delete_btn.setObjectName("DangerButton")
+        self._delete_btn.clicked.connect(self._delete_selected)
+        self._delete_btn.setEnabled(False)
+
+        tb_layout.addWidget(QLabel("🔎"))
+        tb_layout.addWidget(self._search, 1)
+        tb_layout.addWidget(self._rename_btn)
+        tb_layout.addWidget(self._dupe_btn)
+        tb_layout.addWidget(self._norm_btn)
+        tb_layout.addWidget(self._delete_btn)
+        root.addWidget(tb)
+        root.addSpacing(8)
+
+        # Splitter: kit list | pad grid + detail
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Kit list table
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(["Kit Name", "Pads", "Fehlend"])
+        self._table.setAlternatingRowColors(True)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        hv = self._table.horizontalHeader()
+        hv.setSectionResizeMode(0, QHeaderView.Stretch)
+        hv.setSectionResizeMode(1, QHeaderView.Fixed)
+        hv.setSectionResizeMode(2, QHeaderView.Fixed)
+        self._table.setColumnWidth(1, 50)
+        self._table.setColumnWidth(2, 60)
+        self._table.setMinimumWidth(240)
+        self._table.setMaximumWidth(320)
+        self._table.itemSelectionChanged.connect(self._on_kit_selected)
+        splitter.addWidget(self._table)
+
+        # Right panel: pad grid + pad detail
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(8, 0, 0, 0)
+        right_layout.setSpacing(12)
+
+        # Pad grid (4x4 = 16 pads)
+        grid_frame = QFrame()
+        grid_frame.setObjectName("Card")
+        grid_layout_outer = QVBoxLayout(grid_frame)
+        grid_layout_outer.setContentsMargins(12, 12, 12, 12)
+
+        self._kit_title = QLabel("Kein Kit ausgewählt")
+        self._kit_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        grid_layout_outer.addWidget(self._kit_title)
+
+        grid_container = QWidget()
+        self._grid_layout = QGridLayout(grid_container)
+        self._grid_layout.setSpacing(6)
+
+        for i in range(16):
+            pad = PadWidget(i)
+            pad.clicked.connect(self._on_pad_click)
+            self._pads.append(pad)
+            row, col = divmod(i, 4)
+            # Deluge pads: bottom row = pads 13-16 visually (like hardware)
+            grid_row = 3 - row
+            self._grid_layout.addWidget(pad, grid_row, col)
+
+        grid_layout_outer.addWidget(grid_container)
+        right_layout.addWidget(grid_frame)
+
+        # Pad detail
+        self._pad_detail = QFrame()
+        self._pad_detail.setObjectName("Card")
+        pd_layout = QVBoxLayout(self._pad_detail)
+        pd_layout.setContentsMargins(12, 12, 12, 12)
+        pd_layout.setSpacing(6)
+
+        pd_layout.addWidget(self._lbl("Pad Details", "SectionTitle"))
+        self._pad_info = QLabel("Klicke auf ein Pad")
+        self._pad_info.setStyleSheet("color: #888888; font-size: 12px;")
+        self._pad_info.setWordWrap(True)
+
+        self._reassign_btn = QPushButton("🎵  Sample neu zuweisen")
+        self._reassign_btn.setEnabled(False)
+        self._reassign_btn.clicked.connect(self._reassign_pad)
+
+        pd_layout.addWidget(self._pad_info)
+        pd_layout.addWidget(self._reassign_btn)
+
+        right_layout.addWidget(self._pad_detail)
+        right_layout.addStretch()
+
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        root.addWidget(splitter, 1)
+
+        self._status = QLabel("—")
+        self._status.setObjectName("StatusLabel")
+        root.addSpacing(6)
+        root.addWidget(self._status)
+
+        self._selected_pad: Optional[int] = None
+
+    def _lbl(self, text, obj=""):
+        l = QLabel(text)
+        if obj:
+            l.setObjectName(obj)
+        return l
+
+    def update_index(self, index: SDCardIndex):
+        self._index = index
+        self._kits = index.kits
+        self._populate_table(self._kits)
+        self._status.setText(f"{len(self._kits)} Kits")
+
+    def _populate_table(self, kits: list[Kit]):
+        self._table.setRowCount(0)
+        for k in kits:
+            row = self._table.rowCount()
+            self._table.insertRow(row)
+
+            name_item = QTableWidgetItem(k.name)
+            name_item.setData(Qt.UserRole, k)
+            self._table.setItem(row, 0, name_item)
+
+            self._table.setItem(row, 1, QTableWidgetItem(str(k.pad_count)))
+
+            missing_item = QTableWidgetItem(str(len(k.missing_samples)))
+            if k.has_missing_samples:
+                missing_item.setForeground(QColor("#E74C3C"))
+            else:
+                missing_item.setForeground(QColor("#2ECC71"))
+            self._table.setItem(row, 2, missing_item)
+
+    def _filter(self):
+        text = self._search.text().lower()
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            self._table.setRowHidden(row, text != "" and item and text not in item.text().lower())
+
+    def _selected_kit(self) -> Optional[Kit]:
+        rows = self._table.selectedItems()
+        if not rows:
+            return None
+        item = self._table.item(rows[0].row(), 0)
+        return item.data(Qt.UserRole) if item else None
+
+    def _on_kit_selected(self):
+        kit = self._selected_kit()
+        has = kit is not None
+        self._rename_btn.setEnabled(has)
+        self._dupe_btn.setEnabled(has)
+        self._delete_btn.setEnabled(has)
+        self._norm_btn.setEnabled(has)
+        if kit:
+            self._current_kit = kit
+            self._show_kit_pads(kit)
+
+    def _show_kit_pads(self, kit: Kit):
+        self._kit_title.setText(f"🥁  {kit.name}")
+        # Reset all pads
+        for pad in self._pads:
+            pad.set_sample("—", True)
+            pad.setObjectName("Card")
+            pad.style().unpolish(pad)
+            pad.style().polish(pad)
+
+        # Fill with sample refs
+        for i, ref in enumerate(kit.sample_refs[:16]):
+            if i < len(self._pads):
+                name = Path(ref.path.replace("\\", "/")).stem
+                self._pads[i].set_sample(name, ref.exists)
+
+    def _on_pad_click(self, pad_index: int):
+        self._selected_pad = pad_index
+        if not self._current_kit:
+            return
+
+        refs = self._current_kit.sample_refs
+        if pad_index < len(refs):
+            ref = refs[pad_index]
+            status = "✅ Vorhanden" if ref.exists else "❌ Fehlt"
+            self._pad_info.setText(
+                f"Pad {pad_index + 1}\n"
+                f"Sample: {ref.path.split('/')[-1]}\n"
+                f"Pfad: {ref.path}\n"
+                f"Status: {status}"
+            )
+        else:
+            self._pad_info.setText(f"Pad {pad_index + 1}\n(Kein Sample zugewiesen)")
+        self._reassign_btn.setEnabled(True)
+
+    def _reassign_pad(self):
+        if self._selected_pad is None or not self._current_kit or not self._index:
+            return
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, f"Sample für Pad {self._selected_pad + 1} wählen",
+            str(self._index.root_path / "SAMPLES"),
+            "Audio Files (*.wav *.aif *.aiff);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        new_path = Path(file_path)
+        try:
+            new_rel = str(new_path.relative_to(self._index.root_path)).replace("\\", "/")
+        except ValueError:
+            QMessageBox.warning(self, "Fehler", "Datei muss auf der SD-Card liegen.")
+            return
+
+        # Update XML
+        kit = self._current_kit
+        refs = kit.sample_refs
+        if self._selected_pad < len(refs):
+            old_rel = refs[self._selected_pad].path
+            from ..core.file_ops import update_xml_path
+            if update_xml_path(kit.file_path, old_rel, new_rel):
+                self._status.setText(f"✅  Pad {self._selected_pad + 1} → {new_path.name}")
+                self.request_rescan.emit()
+        else:
+            QMessageBox.information(self, "Info", "XML-Schreiben für neue Pads noch nicht implementiert.")
+
+    def _rename_selected(self):
+        kit = self._selected_kit()
+        if not kit:
+            return
+        new_name, ok = QInputDialog.getText(self, "Kit umbenennen", "Neuer Name:", text=kit.name)
+        if not ok or not new_name.strip():
+            return
+        new_path = kit.file_path.parent / f"{new_name.strip()}.XML"
+        if new_path.exists():
+            QMessageBox.warning(self, "Fehler", "Datei existiert bereits.")
+            return
+        try:
+            kit.file_path.rename(new_path)
+            self._status.setText(f"✅  Umbenannt → {new_name}")
+            self.request_rescan.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
+
+    def _duplicate_selected(self):
+        kit = self._selected_kit()
+        if not kit:
+            return
+        new_name, ok = QInputDialog.getText(self, "Kit duplizieren", "Name:", text=f"{kit.name}_copy")
+        if not ok or not new_name.strip():
+            return
+        new_path = kit.file_path.parent / f"{new_name.strip()}.XML"
+        if new_path.exists():
+            QMessageBox.warning(self, "Fehler", "Datei existiert bereits.")
+            return
+        try:
+            shutil.copy2(str(kit.file_path), str(new_path))
+            self._status.setText(f"✅  Dupliziert → {new_name}")
+            self.request_rescan.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
+
+    def _delete_selected(self):
+        kit = self._selected_kit()
+        if not kit:
+            return
+        reply = QMessageBox.question(self, "Löschen", f"'{kit.name}' löschen?", QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            kit.file_path.unlink()
+            self._status.setText(f"🗑  Gelöscht: {kit.name}")
+            self.request_rescan.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
+
+    def _normalize_volumes(self):
+        """Set all OSC volumes in selected kits to max (0x7FFFFFFF)."""
+        kit = self._selected_kit()
+        if not kit:
+            return
+        reply = QMessageBox.question(
+            self, "Volumes normalisieren",
+            f"Alle OSC-Volumes in '{kit.name}' auf Maximum setzen?\n"
+            "(Verhindert zu leise Pads beim Jammen)",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            text = kit.file_path.read_text(encoding="utf-8", errors="replace")
+            import re
+            # Replace volume values inside sound/osc elements
+            new_text = re.sub(
+                r'(<volume>)\s*0x[0-9A-Fa-f]+\s*(</volume>)',
+                r'\g<1>0x7FFFFFFF\2',
+                text
+            )
+            if new_text != text:
+                kit.file_path.write_text(new_text, encoding="utf-8")
+                self._status.setText(f"✅  Volumes in '{kit.name}' normalisiert.")
+            else:
+                self._status.setText("Keine Volume-Tags gefunden.")
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
+
+    def _import_kit(self):
+        if not self._index:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Kit importieren", "", "XML Files (*.xml *.XML)")
+        if not path:
+            return
+        dest = self._index.root_path / "KITS" / Path(path).name
+        if dest.exists():
+            reply = QMessageBox.question(self, "Überschreiben?", f"'{dest.name}' existiert. Überschreiben?", QMessageBox.Yes | QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        try:
+            shutil.copy2(path, str(dest))
+            self._status.setText(f"✅  Importiert: {dest.name}")
+            self.request_rescan.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
