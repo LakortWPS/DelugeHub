@@ -112,6 +112,7 @@ QPushButton {
 }
 QPushButton:hover { background-color: #2980C9; }
 QPushButton:pressed { background-color: #1A5C9E; }
+QPushButton:focus { outline: none; }
 QPushButton:disabled { background-color: #333355; color: #666666; }
 QPushButton#SecondaryButton { background-color: #0F3460; color: #AAAAAA; border: 1px solid #1E3A6E; }
 QPushButton#SecondaryButton:hover { background-color: #1E3A6E; color: #FFFFFF; }
@@ -164,6 +165,7 @@ QScrollBar::handle:horizontal:hover { background: #1E6FBB; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 
 /* === Labels === */
+QLabel { background-color: transparent; }
 QLabel#PageTitle { font-size: 22px; font-weight: bold; color: #FFFFFF; }
 QLabel#PageSubtitle { font-size: 12px; color: #666688; }
 QLabel#SectionTitle { font-size: 11px; font-weight: bold; color: #555577; letter-spacing: 1px; }
@@ -288,6 +290,7 @@ QFrame#CardSuccess { background-color: #FFFFFF; border: 1px solid #2ECC71; borde
 QPushButton { background-color: #1E6FBB; color: #FFFFFF; border: none; border-radius: 6px; padding: 8px 18px; font-weight: bold; font-size: 13px; }
 QPushButton:hover { background-color: #2980C9; }
 QPushButton:pressed { background-color: #1A5C9E; }
+QPushButton:focus { outline: none; }
 QPushButton:disabled { background-color: #CCCCDD; color: #AAAAAA; }
 QPushButton#SecondaryButton { background-color: #F0F0F5; color: #444444; border: 1px solid #CCCCDD; }
 QPushButton#SecondaryButton:hover { background-color: #E0E0EE; color: #1A1A2E; }
@@ -329,6 +332,7 @@ QScrollBar::handle:horizontal:hover { background: #1E6FBB; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 
 /* === Labels === */
+QLabel { background-color: transparent; }
 QLabel#PageTitle { font-size: 22px; font-weight: bold; color: #1A1A2E; }
 QLabel#PageSubtitle { font-size: 12px; color: #AAAAAA; }
 QLabel#SectionTitle { font-size: 11px; font-weight: bold; color: #8888AA; letter-spacing: 1px; }
