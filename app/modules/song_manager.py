@@ -35,6 +35,7 @@ class SongManagerModule(QWidget):
         super().__init__()
         self._index: Optional[SDCardIndex] = None
         self._songs: list[Song] = []
+        self._history = None
         self._build_ui()
 
     def _build_ui(self):
@@ -79,6 +80,24 @@ class SongManagerModule(QWidget):
         self._dupe_btn.clicked.connect(self._duplicate_selected)
         self._dupe_btn.setEnabled(False)
 
+        self._cap_master_btn = QPushButton("⬇  Song-Master")
+        self._cap_master_btn.setObjectName("SecondaryButton")
+        self._cap_master_btn.setToolTip(
+            "Song-Master-Volume (songParams) auf eine Maximallautstärke begrenzen.\n"
+            "Werte über dem Limit werden gesenkt, Werte darunter bleiben unverändert."
+        )
+        self._cap_master_btn.clicked.connect(self._cap_song_master)
+        self._cap_master_btn.setEnabled(False)
+
+        self._cap_clips_btn = QPushButton("⬇  Clip-Vols.")
+        self._cap_clips_btn.setObjectName("SecondaryButton")
+        self._cap_clips_btn.setToolTip(
+            "Alle Clip-Volumes (kitParams/synthParams) auf eine Maximallautstärke begrenzen.\n"
+            "Werte über dem Limit werden gesenkt — interne Sound-Volumes bleiben unberührt."
+        )
+        self._cap_clips_btn.clicked.connect(self._cap_clip_volumes)
+        self._cap_clips_btn.setEnabled(False)
+
         self._delete_btn = QPushButton("🗑  Löschen")
         self._delete_btn.setObjectName("DangerButton")
         self._delete_btn.clicked.connect(self._delete_selected)
@@ -89,6 +108,8 @@ class SongManagerModule(QWidget):
         tb_layout.addWidget(self._export_btn)
         tb_layout.addWidget(self._rename_btn)
         tb_layout.addWidget(self._dupe_btn)
+        tb_layout.addWidget(self._cap_master_btn)
+        tb_layout.addWidget(self._cap_clips_btn)
         tb_layout.addWidget(self._delete_btn)
         root.addWidget(tb)
         root.addSpacing(8)
@@ -165,6 +186,9 @@ class SongManagerModule(QWidget):
             l.setObjectName(obj)
         return l
 
+    def set_history(self, history):
+        self._history = history
+
     def update_index(self, index: SDCardIndex):
         self._index = index
         self._songs = index.songs
@@ -219,6 +243,8 @@ class SongManagerModule(QWidget):
         self._export_btn.setEnabled(has)
         self._rename_btn.setEnabled(has)
         self._dupe_btn.setEnabled(has)
+        self._cap_master_btn.setEnabled(has)
+        self._cap_clips_btn.setEnabled(has)
         self._delete_btn.setEnabled(has)
         if song:
             self._show_detail(song)
@@ -272,6 +298,14 @@ class SongManagerModule(QWidget):
             song.file_path.rename(new_path)
             self._status.setText(f"✅  Song umbenannt → {new_name}")
             self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _old, _new = song.file_path, new_path
+                self._history.push(Action(
+                    description=f"Song umbenannt: {song.name} → {new_name.strip()}",
+                    undo_fn=lambda o=_old, n=_new: n.rename(o),
+                    redo_fn=lambda o=_old, n=_new: o.rename(n),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
@@ -308,9 +342,18 @@ class SongManagerModule(QWidget):
         if reply != QMessageBox.Yes:
             return
         try:
-            song.file_path.unlink()
+            from ..core.history import move_to_trash, restore_from_trash, Action
+            original_path = song.file_path
+            state = [move_to_trash(original_path)]
             self._status.setText(f"🗑  Gelöscht: {song.name}")
             self.request_rescan.emit()
+            if self._history:
+                _op = original_path
+                self._history.push(Action(
+                    description=f"Song gelöscht: {song.name}",
+                    undo_fn=lambda s=state, op=_op: restore_from_trash(s[0], op),
+                    redo_fn=lambda s=state, op=_op: s.__setitem__(0, move_to_trash(op)),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
@@ -343,3 +386,172 @@ class SongManagerModule(QWidget):
             self._status.setText(f"✅  Exportiert: {Path(dest).name} ({size_mb:.1f} MB)")
         except Exception as e:
             QMessageBox.warning(self, "Export-Fehler", str(e))
+
+    # ── Volume-Cap Helpers ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _vol_to_display(hex_str: str) -> float:
+        """Deluge hex volume string → display value 0–50."""
+        v = int(hex_str, 16)
+        if v >= 0x80000000:
+            v -= 0x100000000           # unsigned → signed
+        return ((v + 2_147_483_648) / 4_294_967_295) * 50
+
+    @staticmethod
+    def _display_to_vol(display: float) -> str:
+        """Display value 0–50 → Deluge hex volume string."""
+        amp = max(0.0, min(1.0, display / 50.0))
+        v = int(amp * 4_294_967_295) - 2_147_483_648
+        return f"0x{v & 0xFFFFFFFF:08X}"
+
+    def _cap_song_master(self):
+        """
+        Begrenzt den Song-Master-Volume (songParams/volume) auf einen
+        vom User eingegebenen Maximalwert (0–50).
+        Nur Werte ÜBER dem Limit werden angepasst — leisere bleiben unberührt.
+        """
+        song = self._selected_song()
+        if not song:
+            return
+
+        threshold, ok = QInputDialog.getInt(
+            self, "Song-Master begrenzen",
+            "Maximale Lautstärke für Song-Master (0 – 50):",
+            40, 0, 50, 1
+        )
+        if not ok:
+            return
+
+        from ..core.xml_parser import _parse_xml_robust
+        from ..core.file_ops import _read_xml, _write_xml
+
+        root = _parse_xml_robust(song.file_path)
+        if root is None:
+            QMessageBox.warning(self, "Fehler", "Song-XML konnte nicht geparst werden.")
+            return
+
+        sp = root.find("songParams")
+        if sp is None:
+            self._status.setText("ℹ  Kein <songParams> im Song gefunden.")
+            return
+
+        vol_str = sp.get("volume", "").strip()
+        vol_format = "attr"
+        if not vol_str:
+            vol_elem = sp.find("volume")
+            if vol_elem is not None:
+                vol_str = (vol_elem.text or "").strip()
+                vol_format = "elem"
+
+        if not vol_str:
+            self._status.setText("ℹ  Kein Volume-Wert in songParams gefunden.")
+            return
+
+        current_display = self._vol_to_display(vol_str)
+        if current_display <= threshold:
+            self._status.setText(
+                f"ℹ  Song-Master liegt bei {current_display:.1f}/50 — kein Cap nötig."
+            )
+            return
+
+        new_hex = self._display_to_vol(threshold)
+        text, enc = _read_xml(song.file_path)
+
+        # Nur im Bereich VOR <sessionClips> ersetzen — Clip-Volumes niemals berühren
+        clips_pos = text.find('<sessionClips>')
+        pre_block  = text[:clips_pos] if clips_pos >= 0 else text
+        post_block = text[clips_pos:] if clips_pos >= 0 else ""
+
+        if vol_format == "attr":
+            old_tag, new_tag = f'volume="{vol_str}"', f'volume="{new_hex}"'
+        else:
+            old_tag = f'<volume>{vol_str}</volume>'
+            new_tag = f'<volume>{new_hex}</volume>'
+
+        new_pre = pre_block.replace(old_tag, new_tag, 1)
+        if new_pre == pre_block:
+            self._status.setText("ℹ  Volume-Wert konnte nicht im XML gefunden werden.")
+            return
+
+        new_text = new_pre + post_block
+        try:
+            _write_xml(song.file_path, new_text, enc)
+            self._status.setText(
+                f"✅  Song-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
+            )
+            self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _path, _enc, _before, _after = song.file_path, enc, text, new_text
+                self._history.push(Action(
+                    description=f"Song-Master begrenzt: {song.name} → {threshold}/50",
+                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
+                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
+                ))
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
+
+    def _cap_clip_volumes(self):
+        """
+        Begrenzt alle Clip-Volumes (kitParams/volume und synthParams/volume) auf einen
+        vom User eingegebenen Maximalwert (0–50).
+        Nur Werte ÜBER dem Limit werden angepasst.
+        Interne Sound-Volumes (defaultParams) und songParams bleiben unberührt.
+        """
+        import re
+
+        song = self._selected_song()
+        if not song:
+            return
+
+        threshold, ok = QInputDialog.getInt(
+            self, "Clip-Volumes begrenzen",
+            "Maximale Lautstärke pro Clip (0 – 50):",
+            40, 0, 50, 1
+        )
+        if not ok:
+            return
+
+        from ..core.file_ops import _read_xml, _write_xml
+
+        text, enc = _read_xml(song.file_path)
+
+        vol_to_display = self._vol_to_display
+        display_to_vol = self._display_to_vol
+
+        def cap_volume(m):
+            hex_str = m.group(2)
+            if vol_to_display(hex_str) > threshold:
+                return m.group(1) + f'volume="{display_to_vol(threshold)}"'
+            return m.group(0)
+
+        # Nur <kitParams> und <synthParams> volume-Attribute anpassen —
+        # niemals <defaultParams> (Pad/Sound-Volumes) oder <songParams> berühren
+        new_text = re.sub(
+            r'(<(?:kitParams|synthParams)\b[^>]*)volume="(0x[0-9A-Fa-f]+)"',
+            cap_volume,
+            text,
+        )
+
+        if new_text == text:
+            self._status.setText(
+                f"ℹ  Alle Clip-Volumes bereits ≤ {threshold}/50 — kein Cap nötig."
+            )
+            return
+
+        try:
+            _write_xml(song.file_path, new_text, enc)
+            self._status.setText(
+                f"✅  Clip-Volumes auf max. {threshold}/50 begrenzt."
+            )
+            self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _path, _enc, _before, _after = song.file_path, enc, text, new_text
+                self._history.push(Action(
+                    description=f"Clip-Vols. begrenzt: {song.name} → {threshold}/50",
+                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
+                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
+                ))
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))

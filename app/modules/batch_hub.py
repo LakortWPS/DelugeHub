@@ -21,6 +21,23 @@ from PySide6.QtGui import QColor
 from ..core.models import SDCardIndex
 
 
+# ── Deluge volume helpers (module-level, used by BatchWorker) ───────────────
+
+def _vol_to_display(hex_str: str) -> float:
+    """Deluge hex volume string → display value 0–50."""
+    v = int(hex_str, 16)
+    if v >= 0x80000000:
+        v -= 0x100000000           # unsigned → signed
+    return ((v + 2_147_483_648) / 4_294_967_295) * 50
+
+
+def _display_to_vol(display: float) -> str:
+    """Display value 0–50 → Deluge hex volume string."""
+    amp = max(0.0, min(1.0, display / 50.0))
+    v = int(amp * 4_294_967_295) - 2_147_483_648
+    return f"0x{v & 0xFFFFFFFF:08X}"
+
+
 class BatchWorker(QThread):
     progress = Signal(int, str)
     finished = Signal(dict)
@@ -57,6 +74,12 @@ class BatchWorker(QThread):
                     self._do_export(item)
                 elif op == "normalize_volume":
                     self._do_normalize(item)
+                elif op == "cap_kit_master":
+                    self._do_cap_kit_master(item)
+                elif op == "cap_pad_volumes":
+                    self._do_cap_pad_volumes(item)
+                elif op == "cap_clip_volumes":
+                    self._do_cap_clip_volumes(item)
                 success += 1
             except Exception as e:
                 failed += 1
@@ -87,6 +110,116 @@ class BatchWorker(QThread):
         )
         if new_text != text:
             item.file_path.write_text(new_text, encoding="utf-8")
+
+    def _do_cap_kit_master(self, item):
+        """Begrenzt Kit-Master-Volume auf params['threshold']."""
+        from ..core.xml_parser import _parse_xml_robust
+        from ..core.file_ops import _read_xml, _write_xml
+        threshold = self.params.get("threshold", 40)
+
+        root = _parse_xml_robust(item.file_path)
+        if root is None:
+            return
+        dp = root.find("defaultParams")
+        if dp is None:
+            return
+
+        vol_str = dp.get("volume", "").strip()
+        vol_format = "attr"
+        if not vol_str:
+            vol_elem = dp.find("volume")
+            if vol_elem is not None:
+                vol_str = (vol_elem.text or "").strip()
+                vol_format = "elem"
+        if not vol_str or _vol_to_display(vol_str) <= threshold:
+            return
+
+        new_hex = _display_to_vol(threshold)
+        text, enc = _read_xml(item.file_path)
+
+        sources_pos = text.find('<soundSources>')
+        pre_block  = text[:sources_pos] if sources_pos >= 0 else text
+        post_block = text[sources_pos:] if sources_pos >= 0 else ""
+
+        if vol_format == "attr":
+            old_tag, new_tag = f'volume="{vol_str}"', f'volume="{new_hex}"'
+        else:
+            old_tag = f'<volume>{vol_str}</volume>'
+            new_tag = f'<volume>{new_hex}</volume>'
+
+        new_pre = pre_block.replace(old_tag, new_tag, 1)
+        if new_pre != pre_block:
+            _write_xml(item.file_path, new_pre + post_block, enc)
+
+    def _do_cap_pad_volumes(self, item):
+        """Begrenzt alle Pad-Volumes im Kit auf params['threshold']."""
+        from ..core.xml_parser import _parse_xml_robust
+        from ..core.file_ops import _read_xml, _write_xml
+        threshold = self.params.get("threshold", 40)
+
+        root = _parse_xml_robust(item.file_path)
+        if root is None:
+            return
+        sound_sources = root.find("soundSources")
+        if sound_sources is None:
+            return
+
+        caps = []
+        for sound in sound_sources.findall("sound"):
+            dp = sound.find("defaultParams")
+            if dp is None:
+                continue
+            vol_str = dp.get("volume", "").strip()
+            vol_format = "attr"
+            if not vol_str:
+                vol_elem = dp.find("volume")
+                if vol_elem is not None:
+                    vol_str = (vol_elem.text or "").strip()
+                    vol_format = "elem"
+            if vol_str and _vol_to_display(vol_str) > threshold:
+                caps.append((vol_str, _display_to_vol(threshold), vol_format))
+
+        if not caps:
+            return
+
+        text, enc = _read_xml(item.file_path)
+        sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
+        if not sources_match:
+            return
+
+        block = sources_match.group(1)
+        for current_hex, new_hex, fmt in caps:
+            if fmt == "attr":
+                old_tag, new_tag = f'volume="{current_hex}"', f'volume="{new_hex}"'
+            else:
+                old_tag = f'<volume>{current_hex}</volume>'
+                new_tag = f'<volume>{new_hex}</volume>'
+            block = block.replace(old_tag, new_tag, 1)
+
+        s, e = sources_match.start(1), sources_match.end(1)
+        new_text = text[:s] + block + text[e:]
+        if new_text != text:
+            _write_xml(item.file_path, new_text, enc)
+
+    def _do_cap_clip_volumes(self, item):
+        """Begrenzt alle Clip-Volumes (kitParams/synthParams) im Song auf params['threshold']."""
+        from ..core.file_ops import _read_xml, _write_xml
+        threshold = self.params.get("threshold", 40)
+
+        text, enc = _read_xml(item.file_path)
+
+        def cap_vol(m):
+            if _vol_to_display(m.group(2)) > threshold:
+                return m.group(1) + f'volume="{_display_to_vol(threshold)}"'
+            return m.group(0)
+
+        new_text = re.sub(
+            r'(<(?:kitParams|synthParams)\b[^>]*)volume="(0x[0-9A-Fa-f]+)"',
+            cap_vol,
+            text,
+        )
+        if new_text != text:
+            _write_xml(item.file_path, new_text, enc)
 
 
 class BatchHubModule(QWidget):
@@ -161,6 +294,11 @@ class BatchHubModule(QWidget):
         ])
         if content_type in ("kits", "synths"):
             op_combo.addItem("Volumes normalisieren")
+        if content_type == "kits":
+            op_combo.addItem("Kit-Master begrenzen")
+            op_combo.addItem("Pad-Volumes begrenzen")
+        if content_type == "songs":
+            op_combo.addItem("Clip-Volumes begrenzen")
 
         op_row.addWidget(op_lbl)
         op_row.addWidget(op_combo)
@@ -435,6 +573,9 @@ class BatchHubModule(QWidget):
             "Batch Exportieren": "export",
             "Batch Löschen": "delete",
             "Volumes normalisieren": "normalize_volume",
+            "Kit-Master begrenzen": "cap_kit_master",
+            "Pad-Volumes begrenzen": "cap_pad_volumes",
+            "Clip-Volumes begrenzen": "cap_clip_volumes",
         }
         op = op_map.get(operation_text, "")
         if not op:
@@ -456,6 +597,16 @@ class BatchHubModule(QWidget):
             if not dest:
                 return
             params["dest_dir"] = dest
+
+        if op in ("cap_kit_master", "cap_pad_volumes", "cap_clip_volumes"):
+            threshold, ok = QInputDialog.getInt(
+                self, "Lautstärke begrenzen",
+                f"Maximale Lautstärke für {len(items)} Dateien (0 – 50):",
+                40, 0, 50, 1
+            )
+            if not ok:
+                return
+            params["threshold"] = threshold
 
         self._progress.setVisible(True)
         self._progress.setValue(0)

@@ -1,6 +1,6 @@
 """
 DelugeHub — Kit Manager Module
-Browse kits, view pad assignments, re-assign samples, volume normalize.
+Browse kits, view pad assignments, re-assign samples, normalize and cap volumes.
 """
 import shutil
 import xml.etree.ElementTree as ET
@@ -71,6 +71,7 @@ class KitManagerModule(QWidget):
         self._kits: list[Kit] = []
         self._current_kit: Optional[Kit] = None
         self._pads: list[PadWidget] = []
+        self._history = None
         self._build_ui()
 
     def _build_ui(self):
@@ -115,9 +116,30 @@ class KitManagerModule(QWidget):
         self._dupe_btn.setEnabled(False)
 
         self._norm_btn = QPushButton("🔊  Volumes normalisieren")
-        self._norm_btn.setToolTip("Alle Pad-Volumes auf gleichen Wert setzen (Batch verfügbar)")
+        self._norm_btn.setToolTip(
+            "WAV-Dateien analysieren (RMS) und Pad-Volumes angleichen,\n"
+            "sodass alle Pads gleich laut klingen."
+        )
         self._norm_btn.clicked.connect(self._normalize_volumes)
         self._norm_btn.setEnabled(False)
+
+        self._cap_master_btn = QPushButton("⬇  Master-Vol.")
+        self._cap_master_btn.setObjectName("SecondaryButton")
+        self._cap_master_btn.setToolTip(
+            "Kit-Master-Volume auf eine Maximallautstärke begrenzen.\n"
+            "Werte über dem Limit werden gesenkt, Werte darunter bleiben unverändert."
+        )
+        self._cap_master_btn.clicked.connect(self._cap_kit_master)
+        self._cap_master_btn.setEnabled(False)
+
+        self._cap_pads_btn = QPushButton("⬇  Pad-Vols.")
+        self._cap_pads_btn.setObjectName("SecondaryButton")
+        self._cap_pads_btn.setToolTip(
+            "Alle Pad-Volumes auf eine Maximallautstärke begrenzen.\n"
+            "Werte über dem Limit werden gesenkt, Werte darunter bleiben unverändert."
+        )
+        self._cap_pads_btn.clicked.connect(self._cap_pad_volumes)
+        self._cap_pads_btn.setEnabled(False)
 
         self._delete_btn = QPushButton("🗑  Löschen")
         self._delete_btn.setObjectName("DangerButton")
@@ -129,6 +151,8 @@ class KitManagerModule(QWidget):
         tb_layout.addWidget(self._rename_btn)
         tb_layout.addWidget(self._dupe_btn)
         tb_layout.addWidget(self._norm_btn)
+        tb_layout.addWidget(self._cap_master_btn)
+        tb_layout.addWidget(self._cap_pads_btn)
         tb_layout.addWidget(self._delete_btn)
         root.addWidget(tb)
         root.addSpacing(8)
@@ -227,6 +251,9 @@ class KitManagerModule(QWidget):
             l.setObjectName(obj)
         return l
 
+    def set_history(self, history):
+        self._history = history
+
     def update_index(self, index: SDCardIndex):
         self._index = index
         self._kits = index.kits
@@ -272,6 +299,8 @@ class KitManagerModule(QWidget):
         self._dupe_btn.setEnabled(has)
         self._delete_btn.setEnabled(has)
         self._norm_btn.setEnabled(has)
+        self._cap_master_btn.setEnabled(has)
+        self._cap_pads_btn.setEnabled(has)
         if kit:
             self._current_kit = kit
             self._show_kit_pads(kit)
@@ -356,6 +385,14 @@ class KitManagerModule(QWidget):
             kit.file_path.rename(new_path)
             self._status.setText(f"✅  Umbenannt → {new_name}")
             self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _old, _new = kit.file_path, new_path
+                self._history.push(Action(
+                    description=f"Kit umbenannt: {kit.name} → {new_name}",
+                    undo_fn=lambda o=_old, n=_new: n.rename(o),
+                    redo_fn=lambda o=_old, n=_new: o.rename(n),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
@@ -374,6 +411,15 @@ class KitManagerModule(QWidget):
             shutil.copy2(str(kit.file_path), str(new_path))
             self._status.setText(f"✅  Dupliziert → {new_name}")
             self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                import shutil as _shutil
+                _src, _dst = kit.file_path, new_path
+                self._history.push(Action(
+                    description=f"Kit dupliziert: {new_name}",
+                    undo_fn=lambda p=_dst: p.unlink() if p.exists() else None,
+                    redo_fn=lambda s=_src, d=_dst: _shutil.copy2(str(s), str(d)),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
@@ -385,39 +431,232 @@ class KitManagerModule(QWidget):
         if reply != QMessageBox.Yes:
             return
         try:
-            kit.file_path.unlink()
+            from ..core.history import move_to_trash, restore_from_trash, Action
+            original_path = kit.file_path
+            state = [move_to_trash(original_path)]
             self._status.setText(f"🗑  Gelöscht: {kit.name}")
             self.request_rescan.emit()
+            if self._history:
+                _op = original_path
+                self._history.push(Action(
+                    description=f"Kit gelöscht: {kit.name}",
+                    undo_fn=lambda s=state, op=_op: restore_from_trash(s[0], op),
+                    redo_fn=lambda s=state, op=_op: s.__setitem__(0, move_to_trash(op)),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
     def _normalize_volumes(self):
-        """Set all OSC volumes in selected kits to max (0x7FFFFFFF)."""
+        """
+        Option B — Audio-RMS-Analyse:
+        Liest jede WAV-Datei eines Pads, misst den RMS-Pegel und setzt die
+        Deluge-Pad-Volumes so, dass alle Pads gleich laut klingen.
+        Der lauteste Pad behält sein Volume; leisere werden proportional angehoben.
+
+        Fixes vs. alter Implementierung:
+        - Verwendet _read_xml/_write_xml (encoding-sicher)
+        - Ersetzt NUR Volumes innerhalb <soundSources>, nicht das Kit-Master-Volume
+        - Ersetzt die Werte positionsgenau (kein blindes globales Regex)
+        - Emittiert request_rescan nach dem Schreiben
+        """
         kit = self._selected_kit()
-        if not kit:
+        if not kit or not self._index:
             return
+
         reply = QMessageBox.question(
-            self, "Volumes normalisieren",
-            f"Alle OSC-Volumes in '{kit.name}' auf Maximum setzen?\n"
-            "(Verhindert zu leise Pads beim Jammen)",
+            self, "Volumes normalisieren (Audio-Analyse)",
+            f"Pad-Volumes in '{kit.name}' per RMS-Analyse angleichen?\n\n"
+            "• Jede WAV-Datei wird analysiert\n"
+            "• Der lauteste Pad behält sein Volume\n"
+            "• Leisere Pads werden proportional angehoben\n"
+            "• Pads ohne vorhandenes Sample werden übersprungen",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             return
-        try:
-            text = kit.file_path.read_text(encoding="utf-8", errors="replace")
-            import re
-            # Replace volume values inside sound/osc elements
-            new_text = re.sub(
-                r'(<volume>)\s*0x[0-9A-Fa-f]+\s*(</volume>)',
-                r'\g<1>0x7FFFFFFF\2',
-                text
-            )
-            if new_text != text:
-                kit.file_path.write_text(new_text, encoding="utf-8")
-                self._status.setText(f"✅  Volumes in '{kit.name}' normalisiert.")
+
+        # ── 1. XML parsen ─────────────────────────────────────────────────
+        from ..core.xml_parser import _parse_xml_robust
+        from ..core.file_ops import _read_xml, _write_xml
+
+        root = _parse_xml_robust(kit.file_path)
+        if root is None:
+            QMessageBox.warning(self, "Fehler", "Kit-XML konnte nicht geparst werden.")
+            return
+
+        sound_sources = root.find("soundSources")
+        if sound_sources is None:
+            QMessageBox.warning(self, "Fehler", "Keine <soundSources> in diesem Kit gefunden.")
+            return
+
+        # ── 2. Pad-Infos sammeln ─────────────────────────────────────────
+        # Deluge hat zwei XML-Formate:
+        #   Alt (Firmware <4):  Parameter als Child-Elemente
+        #                       <osc1><fileName>…</fileName></osc1>
+        #                       <defaultParams><volume>0x…</volume></defaultParams>
+        #   Neu (Firmware 4+):  Parameter als Attribute
+        #                       <osc1 fileName="…" …>
+        #                       <defaultParams volume="0x…" …>
+        pads = []
+        for sound in sound_sources.findall("sound"):
+            # ── Sample-Pfad ──────────────────────────────────────────────
+            osc1 = sound.find("osc1")
+            if osc1 is None:
+                continue
+
+            # Neues Format: Attribut auf <osc1>
+            file_name = osc1.get("fileName", "").strip()
+            if not file_name:
+                # Altes Format: Child-Element <fileName>
+                fname_elem = osc1.find("fileName")
+                if fname_elem is not None:
+                    file_name = (fname_elem.text or "").strip()
+
+            if not file_name:
+                continue
+
+            rel = file_name.replace("\\", "/").lstrip("/")
+            abs_path = self._index.root_path / rel
+            if not abs_path.exists():
+                continue
+
+            # ── Per-Pad-Volume ───────────────────────────────────────────
+            dp = sound.find("defaultParams")
+            if dp is None:
+                continue
+
+            # Neues Format: Attribut auf <defaultParams>
+            vol_attr = dp.get("volume", "").strip()
+            if vol_attr:
+                vol_format = "attr"
+                current_vol = vol_attr
             else:
-                self._status.setText("Keine Volume-Tags gefunden.")
+                # Altes Format: Child-Element <volume>
+                vol_elem = dp.find("volume")
+                if vol_elem is None or not (vol_elem.text or "").strip():
+                    continue
+                vol_format = "elem"
+                current_vol = vol_elem.text.strip()
+
+            pads.append({
+                "abs_path": abs_path,
+                "current_vol": current_vol,
+                "vol_format": vol_format,   # "attr" | "elem"
+                "rms": None,
+                "new_vol": None,
+            })
+
+        if not pads:
+            QMessageBox.information(
+                self, "Info",
+                "Keine Pads mit vorhandenen Samples und Volume-Werten gefunden."
+            )
+            return
+
+        # ── 3. RMS messen ────────────────────────────────────────────────
+        try:
+            import soundfile as sf
+            import numpy as np
+        except ImportError:
+            QMessageBox.warning(
+                self, "Fehlende Bibliothek",
+                "soundfile ist nicht installiert.\n\n"
+                "Bitte im Terminal ausführen:\n"
+                "  pip install soundfile"
+            )
+            return
+
+        for pad in pads:
+            try:
+                data, _ = sf.read(str(pad["abs_path"]), dtype="float32", always_2d=True)
+                mono = np.mean(data, axis=1)
+                rms = float(np.sqrt(np.mean(mono ** 2)))
+                pad["rms"] = rms if rms > 1e-8 else None
+            except Exception:
+                pad["rms"] = None
+
+        valid_pads = [p for p in pads if p["rms"] is not None]
+        if not valid_pads:
+            QMessageBox.warning(
+                self, "Fehler",
+                "Konnte keine Sample-Dateien analysieren.\n"
+                "Prüfe ob die WAV/AIFF-Dateien lesbar sind."
+            )
+            return
+
+        # ── 4. Neue Volumes berechnen ────────────────────────────────────
+        # Deluge signed-int32 ↔ lineare Amplitude [0..1]:
+        #   0x80000000 = 0 (Stille), 0x7FFFFFFF = 1.0 (Maximum)
+        #   Beispiel: 0x3504F334 ≈ 0.707 (−3 dB) — Deluge-Standardwert
+        def vol_to_amp(hex_str: str) -> float:
+            v = int(hex_str, 16)
+            if v >= 0x80000000:
+                v -= 0x100000000          # unsigned → signed
+            return (v + 2_147_483_648) / 4_294_967_295
+
+        def amp_to_vol(amp: float) -> str:
+            amp = max(0.0, min(1.0, amp))
+            v = int(amp * 4_294_967_295) - 2_147_483_648
+            return f"0x{v & 0xFFFFFFFF:08X}"
+
+        target_rms = max(p["rms"] for p in valid_pads)   # lautester Pad = Referenz
+        for pad in valid_pads:
+            gain = target_rms / pad["rms"]
+            new_amp = min(vol_to_amp(pad["current_vol"]) * gain, 1.0)
+            pad["new_vol"] = amp_to_vol(new_amp)
+
+        # ── 5. Änderungen in XML-Text schreiben ──────────────────────────
+        # Nur innerhalb des <soundSources>-Blocks ersetzen, damit das
+        # Kit-Master-Volume (<kit><defaultParams><volume>) unberührt bleibt.
+        import re
+        text, enc = _read_xml(kit.file_path)
+
+        sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
+        if not sources_match:
+            QMessageBox.warning(self, "Fehler", "<soundSources>-Block nicht im XML gefunden.")
+            return
+
+        sources_block = sources_match.group(1)
+        changed = 0
+        for pad in valid_pads:
+            if pad["new_vol"] and pad["new_vol"] != pad["current_vol"]:
+                if pad["vol_format"] == "attr":
+                    # Neues Format: volume="0x…" als Attribut
+                    old_tag = f'volume="{pad["current_vol"]}"'
+                    new_tag = f'volume="{pad["new_vol"]}"'
+                else:
+                    # Altes Format: <volume>0x…</volume> als Child-Element
+                    old_tag = f'<volume>{pad["current_vol"]}</volume>'
+                    new_tag = f'<volume>{pad["new_vol"]}</volume>'
+
+                new_block = sources_block.replace(old_tag, new_tag, 1)
+                if new_block != sources_block:
+                    sources_block = new_block
+                    changed += 1
+
+        if changed == 0:
+            self._status.setText("ℹ  Keine Änderungen nötig — alle Pads bereits auf gleicher Lautstärke.")
+            return
+
+        start, end = sources_match.start(1), sources_match.end(1)
+        new_text = text[:start] + sources_block + text[end:]
+
+        try:
+            _write_xml(kit.file_path, new_text, enc)
+            skipped = len(pads) - len(valid_pads)
+            skip_note = f" ({skipped} ohne Sample übersprungen)" if skipped else ""
+            self._status.setText(
+                f"✅  {changed} Pad-Volume(s) normalisiert (RMS-Analyse){skip_note}."
+            )
+            self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
+                self._history.push(Action(
+                    description=f"Volumes normalisiert: {kit.name}",
+                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
+                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
@@ -436,5 +675,207 @@ class KitManagerModule(QWidget):
             shutil.copy2(path, str(dest))
             self._status.setText(f"✅  Importiert: {dest.name}")
             self.request_rescan.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
+
+    # ── Volume-Cap Helpers ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _vol_to_display(hex_str: str) -> float:
+        """Deluge hex volume string → display value 0–50."""
+        v = int(hex_str, 16)
+        if v >= 0x80000000:
+            v -= 0x100000000           # unsigned → signed
+        return ((v + 2_147_483_648) / 4_294_967_295) * 50
+
+    @staticmethod
+    def _display_to_vol(display: float) -> str:
+        """Display value 0–50 → Deluge hex volume string."""
+        amp = max(0.0, min(1.0, display / 50.0))
+        v = int(amp * 4_294_967_295) - 2_147_483_648
+        return f"0x{v & 0xFFFFFFFF:08X}"
+
+    def _cap_kit_master(self):
+        """
+        Begrenzt den Kit-Master-Volume (kit/defaultParams/volume) auf einen
+        vom User eingegebenen Maximalwert (0–50).
+        Nur Werte ÜBER dem Limit werden angepasst — leisere bleiben unberührt.
+        """
+        kit = self._selected_kit()
+        if not kit:
+            return
+
+        threshold, ok = QInputDialog.getInt(
+            self, "Kit-Master begrenzen",
+            "Maximale Lautstärke für Kit-Master (0 – 50):",
+            40, 0, 50, 1
+        )
+        if not ok:
+            return
+
+        from ..core.xml_parser import _parse_xml_robust
+        from ..core.file_ops import _read_xml, _write_xml
+
+        root = _parse_xml_robust(kit.file_path)
+        if root is None:
+            QMessageBox.warning(self, "Fehler", "Kit-XML konnte nicht geparst werden.")
+            return
+
+        # Kit-Master-Volume = <defaultParams> direkt unter dem <kit>-Root
+        dp = root.find("defaultParams")
+        if dp is None:
+            self._status.setText("ℹ  Kein <defaultParams> im Kit-Root gefunden.")
+            return
+
+        vol_str = dp.get("volume", "").strip()
+        vol_format = "attr"
+        if not vol_str:
+            vol_elem = dp.find("volume")
+            if vol_elem is not None:
+                vol_str = (vol_elem.text or "").strip()
+                vol_format = "elem"
+
+        if not vol_str:
+            self._status.setText("ℹ  Kein Volume-Wert im Kit-Master gefunden.")
+            return
+
+        current_display = self._vol_to_display(vol_str)
+        if current_display <= threshold:
+            self._status.setText(
+                f"ℹ  Kit-Master liegt bei {current_display:.1f}/50 — kein Cap nötig."
+            )
+            return
+
+        new_hex = self._display_to_vol(threshold)
+        text, enc = _read_xml(kit.file_path)
+
+        # Nur im Bereich VOR <soundSources> ersetzen — Pad-Volumes niemals berühren
+        sources_pos = text.find('<soundSources>')
+        pre_block  = text[:sources_pos] if sources_pos >= 0 else text
+        post_block = text[sources_pos:] if sources_pos >= 0 else ""
+
+        if vol_format == "attr":
+            old_tag, new_tag = f'volume="{vol_str}"', f'volume="{new_hex}"'
+        else:
+            old_tag = f'<volume>{vol_str}</volume>'
+            new_tag = f'<volume>{new_hex}</volume>'
+
+        new_pre = pre_block.replace(old_tag, new_tag, 1)
+        if new_pre == pre_block:
+            self._status.setText("ℹ  Volume-Wert konnte nicht im XML gefunden werden.")
+            return
+
+        new_text = new_pre + post_block
+        try:
+            _write_xml(kit.file_path, new_text, enc)
+            self._status.setText(
+                f"✅  Kit-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
+            )
+            self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
+                self._history.push(Action(
+                    description=f"Kit-Master begrenzt: {kit.name} → {threshold}/50",
+                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
+                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
+                ))
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
+
+    def _cap_pad_volumes(self):
+        """
+        Begrenzt alle Pad-Volumes (soundSources/sound/defaultParams/volume) auf
+        einen vom User eingegebenen Maximalwert (0–50).
+        Nur Werte ÜBER dem Limit werden angepasst. Kit-Master bleibt unberührt.
+        """
+        kit = self._selected_kit()
+        if not kit:
+            return
+
+        threshold, ok = QInputDialog.getInt(
+            self, "Pad-Volumes begrenzen",
+            "Maximale Lautstärke pro Pad (0 – 50):",
+            40, 0, 50, 1
+        )
+        if not ok:
+            return
+
+        import re
+        from ..core.xml_parser import _parse_xml_robust
+        from ..core.file_ops import _read_xml, _write_xml
+
+        root = _parse_xml_robust(kit.file_path)
+        if root is None:
+            QMessageBox.warning(self, "Fehler", "Kit-XML konnte nicht geparst werden.")
+            return
+
+        sound_sources = root.find("soundSources")
+        if sound_sources is None:
+            self._status.setText("ℹ  Keine <soundSources> in diesem Kit gefunden.")
+            return
+
+        # Alle Pad-Volumes sammeln, die über dem Limit liegen
+        caps = []
+        for sound in sound_sources.findall("sound"):
+            dp = sound.find("defaultParams")
+            if dp is None:
+                continue
+            vol_str = dp.get("volume", "").strip()
+            vol_format = "attr"
+            if not vol_str:
+                vol_elem = dp.find("volume")
+                if vol_elem is not None:
+                    vol_str = (vol_elem.text or "").strip()
+                    vol_format = "elem"
+            if vol_str and self._vol_to_display(vol_str) > threshold:
+                caps.append((vol_str, self._display_to_vol(threshold), vol_format))
+
+        if not caps:
+            self._status.setText(
+                f"ℹ  Alle Pad-Volumes bereits ≤ {threshold}/50 — kein Cap nötig."
+            )
+            return
+
+        text, enc = _read_xml(kit.file_path)
+
+        sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
+        if not sources_match:
+            QMessageBox.warning(self, "Fehler", "<soundSources>-Block nicht gefunden.")
+            return
+
+        sources_block = sources_match.group(1)
+        changed = 0
+        for current_hex, new_hex, fmt in caps:
+            if fmt == "attr":
+                old_tag, new_tag = f'volume="{current_hex}"', f'volume="{new_hex}"'
+            else:
+                old_tag = f'<volume>{current_hex}</volume>'
+                new_tag = f'<volume>{new_hex}</volume>'
+            new_block = sources_block.replace(old_tag, new_tag, 1)
+            if new_block != sources_block:
+                sources_block = new_block
+                changed += 1
+
+        if changed == 0:
+            self._status.setText("ℹ  Keine Änderungen vorgenommen.")
+            return
+
+        start, end = sources_match.start(1), sources_match.end(1)
+        new_text = text[:start] + sources_block + text[end:]
+        try:
+            _write_xml(kit.file_path, new_text, enc)
+            self._status.setText(
+                f"✅  {changed} Pad-Volume(s) auf max. {threshold}/50 begrenzt."
+            )
+            self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
+                self._history.push(Action(
+                    description=f"Pad-Vols. begrenzt: {kit.name} → {threshold}/50",
+                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
+                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
