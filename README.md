@@ -1,4 +1,4 @@
-# DelugeHub v2.0.1
+# DelugeHub v2.0.2
 
 **All-in-One Synthstrom Deluge SD-Card Manager**
 
@@ -81,11 +81,17 @@ See [installer/README.md](installer/README.md) for full instructions.
 installer\build_installer.bat
 ```
 
-Output: `installer\output\DelugeHub-2.0.1-Setup.exe`
+Output: `installer\output\DelugeHub-2.0.2-Setup.exe`
 
 ---
 
 ## Changelog
+
+### v2.0.2 — 2026-04-16 · Installer & Fixes
+
+- **New:** Windows installer build system (PyInstaller + Inno Setup) — produces a standalone `.exe`, no Python required on end user's machine; see `installer/README.md`
+- **Fix:** Batch Hub checkbox column header was truncated — replaced with `✓` icon
+- **Fix:** Null bytes in `synth_editor.py` from merge conflict removed
 
 ### v2.0.1 — 2026-04-16 · UI Fixes & Improvements
 

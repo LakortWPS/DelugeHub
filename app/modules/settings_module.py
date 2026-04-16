@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from pathlib import Path
 
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 
 
 class SettingsModule(QWidget):
@@ -161,5 +161,4 @@ class SettingsModule(QWidget):
         return {
             "sd_path": self._sd_input.text().strip(),
             "theme": self._theme_combo.currentText().lower(),
-            "auto_scan": self._auto_scan_cb.isChecked(),
-        }
+            "auto_scan": sel

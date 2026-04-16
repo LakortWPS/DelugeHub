@@ -5,6 +5,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.2] — 2026-04-16
+
+### Added
+- **Windows Installer**: build system via PyInstaller + Inno Setup — produces a standalone `DelugeHub-x.x.x-Setup.exe` requiring no Python installation on the end user's machine; see `installer/README.md`
+
+### Fixed
+- **Batch Hub**: checkbox column header was truncated — replaced with `✓` icon and reduced column width to 30px
+- **synth_editor.py**: null bytes appended during merge conflict removed — file is now valid Python again
+
+---
+
 ## [2.0.1] — 2026-04-16
 
 ### Fixed
