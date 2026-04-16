@@ -205,7 +205,7 @@ QSlider::sub-page:horizontal { background: #1E6FBB; border-radius: 2px; }
 
 /* === Message Box === */
 QMessageBox { background-color: #16213E; color: #E0E0E0; }
-QMessageBox QPushButton { min-width: 80px; }
+QMessageBox QPushButton { min-width: 120px; }
 
 /* === CheckBox === */
 QCheckBox { color: #E0E0E0; spacing: 8px; }
@@ -368,7 +368,7 @@ QSlider::sub-page:horizontal { background: #1E6FBB; border-radius: 2px; }
 
 /* === Message Box === */
 QMessageBox { background-color: #FFFFFF; color: #1A1A2E; }
-QMessageBox QPushButton { min-width: 80px; }
+QMessageBox QPushButton { min-width: 120px; }
 
 /* === CheckBox === */
 QCheckBox { color: #1A1A2E; spacing: 8px; }

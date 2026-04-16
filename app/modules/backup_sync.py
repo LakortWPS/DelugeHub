@@ -140,7 +140,7 @@ class BackupSyncModule(QWidget):
 
         self._create_btn = QPushButton("💾  Backup jetzt erstellen")
         self._create_btn.setObjectName("SuccessButton")
-        self._create_btn.setFixedHeight(40)
+        self._create_btn.setMinimumHeight(40)
         self._create_btn.clicked.connect(self._create_backup)
         create_layout.addWidget(self._create_btn)
 
@@ -167,7 +167,7 @@ class BackupSyncModule(QWidget):
 
         refresh_btn = QPushButton("🔄  Verlauf laden")
         refresh_btn.setObjectName("SecondaryButton")
-        refresh_btn.setFixedHeight(32)
+        refresh_btn.setMinimumHeight(32)
         refresh_btn.clicked.connect(self._load_history)
 
         left_layout.addWidget(refresh_btn)
@@ -177,11 +177,15 @@ class BackupSyncModule(QWidget):
         hist_btn_row = QHBoxLayout()
         self._restore_btn = QPushButton("♻  Wiederherstellen")
         self._restore_btn.setObjectName("SuccessButton")
+        self._restore_btn.setMinimumHeight(32)
+        self._restore_btn.setMinimumWidth(140)
         self._restore_btn.setEnabled(False)
         self._restore_btn.clicked.connect(self._restore_selected)
 
         self._delete_backup_btn = QPushButton("🗑  Backup löschen")
         self._delete_backup_btn.setObjectName("DangerButton")
+        self._delete_backup_btn.setMinimumHeight(32)
+        self._delete_backup_btn.setMinimumWidth(130)
         self._delete_backup_btn.setEnabled(False)
         self._delete_backup_btn.clicked.connect(self._delete_selected_backup)
 
