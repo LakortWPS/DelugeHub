@@ -18,10 +18,10 @@ venv/
 env/
 ENV/
 
-# PyInstaller
-*.spec
-# Uncomment if you don't want to track the spec:
-# Delugeyhub.spec
+# PyInstaller build output (spec files are tracked)
+dist/
+build/
+installer/output/
 
 # IDEs
 .vscode/
