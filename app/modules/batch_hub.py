@@ -19,6 +19,7 @@ from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex
+from ..core.staging import StagingStore, PendingChange, ChangeType
 
 
 # ── Deluge volume helpers (module-level, used by BatchWorker) ───────────────
@@ -40,7 +41,7 @@ def _display_to_vol(display: float) -> str:
 
 class BatchWorker(QThread):
     progress = Signal(int, str)
-    finished = Signal(dict)
+    finished = Signal(dict, list)   # (stats, list[PendingChange])
     error = Signal(str)
 
     def __init__(self, items: list, operation: str, params: dict):
@@ -51,15 +52,16 @@ class BatchWorker(QThread):
 
     def run(self):
         try:
-            result = self._process()
-            self.finished.emit(result)
+            stats, pending = self._process()
+            self.finished.emit(stats, pending)
         except Exception as e:
             self.error.emit(str(e))
 
-    def _process(self) -> dict:
+    def _process(self) -> tuple[dict, list]:
         op = self.operation
         total = len(self.items)
         success = failed = 0
+        pending: list[PendingChange] = []
 
         for i, item in enumerate(self.items):
             pct = int((i + 1) / max(total, 1) * 100)
@@ -67,26 +69,40 @@ class BatchWorker(QThread):
 
             try:
                 if op == "rename":
-                    self._do_rename(item, i)
+                    change = self._do_rename(item, i)
+                    if change:
+                        pending.append(change)
                 elif op == "delete":
-                    item.file_path.unlink()
+                    pending.append(PendingChange(
+                        change_type=ChangeType.DELETE,
+                        file_path=item.file_path,
+                        source_module="batch_hub",
+                    ))
                 elif op == "export":
-                    self._do_export(item)
+                    self._do_export(item)   # direkt — kein Staging nötig
                 elif op == "normalize_volume":
-                    self._do_normalize(item)
+                    change = self._do_normalize(item)
+                    if change:
+                        pending.append(change)
                 elif op == "cap_kit_master":
-                    self._do_cap_kit_master(item)
+                    change = self._do_cap_kit_master(item)
+                    if change:
+                        pending.append(change)
                 elif op == "cap_pad_volumes":
-                    self._do_cap_pad_volumes(item)
+                    change = self._do_cap_pad_volumes(item)
+                    if change:
+                        pending.append(change)
                 elif op == "cap_clip_volumes":
-                    self._do_cap_clip_volumes(item)
+                    change = self._do_cap_clip_volumes(item)
+                    if change:
+                        pending.append(change)
                 success += 1
-            except Exception as e:
+            except Exception:
                 failed += 1
 
-        return {"success": success, "failed": failed, "total": total}
+        return {"success": success, "failed": failed, "total": total}, pending
 
-    def _do_rename(self, item, index: int):
+    def _do_rename(self, item, index: int) -> Optional[PendingChange]:
         pattern: str = self.params.get("pattern", "{name}")
         new_name = pattern.replace("{name}", item.name)
         new_name = new_name.replace("{index}", str(index + 1).zfill(3))
@@ -94,58 +110,56 @@ class BatchWorker(QThread):
         if not new_name.lower().endswith(".xml"):
             new_name += ".XML"
         new_path = item.file_path.parent / new_name
-        if not new_path.exists():
-            item.file_path.rename(new_path)
+        if not new_path.exists() and new_name != item.file_path.name:
+            return PendingChange(
+                change_type=ChangeType.RENAME,
+                file_path=item.file_path,
+                source_module="batch_hub",
+                new_name=new_name,
+            )
+        return None
 
     def _do_export(self, item):
         dest_dir = Path(self.params.get("dest_dir", "."))
         shutil.copy2(str(item.file_path), str(dest_dir / item.file_path.name))
 
-    def _do_normalize(self, item):
-        """
-        Setzt alle Pad-Volumes (nur innerhalb <soundSources>) auf Maximum (0x7FFFFFFF).
-        Nutzt _read_xml/_write_xml — bewahrt das originale Datei-Encoding.
-        Das Kit-Master-Volume außerhalb von <soundSources> bleibt unberührt.
-        """
-        from ..core.file_ops import _read_xml, _write_xml
+    def _do_normalize(self, item) -> Optional[PendingChange]:
+        """Setzt alle Pad-Volumes (nur innerhalb <soundSources>) auf Maximum."""
+        from ..core.file_ops import _read_xml
         text, enc = _read_xml(item.file_path)
 
-        # Nur den <soundSources>-Block bearbeiten
         sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
         if not sources_match:
-            return  # kein soundSources-Block (z.B. Synth-Datei) — nichts tun
+            return None
 
         block = sources_match.group(1)
-        # Element-Form: <volume>0x…</volume>
-        block = re.sub(
-            r'(<volume>)\s*0x[0-9A-Fa-f]+\s*(</volume>)',
-            r'\g<1>0x7FFFFFFF\2',
-            block,
-        )
-        # Attribut-Form: volume="0x…"
-        block = re.sub(
-            r'(volume=")0x[0-9A-Fa-f]+(")',
-            r'\g<1>0x7FFFFFFF\2',
-            block,
-        )
+        block = re.sub(r'(<volume>)\s*0x[0-9A-Fa-f]+\s*(</volume>)', r'\g<1>0x7FFFFFFF\2', block)
+        block = re.sub(r'(volume=")0x[0-9A-Fa-f]+(")', r'\g<1>0x7FFFFFFF\2', block)
 
         s, e = sources_match.start(1), sources_match.end(1)
         new_text = text[:s] + block + text[e:]
-        if new_text != text:
-            _write_xml(item.file_path, new_text, enc)
+        if new_text == text:
+            return None
+        return PendingChange(
+            change_type=ChangeType.XML_EDIT,
+            file_path=item.file_path,
+            source_module="batch_hub",
+            new_content=new_text,
+            encoding=enc,
+        )
 
-    def _do_cap_kit_master(self, item):
+    def _do_cap_kit_master(self, item) -> Optional[PendingChange]:
         """Begrenzt Kit-Master-Volume auf params['threshold']."""
         from ..core.xml_parser import _parse_xml_robust
-        from ..core.file_ops import _read_xml, _write_xml
+        from ..core.file_ops import _read_xml
         threshold = self.params.get("threshold", 40)
 
         root = _parse_xml_robust(item.file_path)
         if root is None:
-            return
+            return None
         dp = root.find("defaultParams")
         if dp is None:
-            return
+            return None
 
         vol_str = dp.get("volume", "").strip()
         vol_format = "attr"
@@ -155,7 +169,7 @@ class BatchWorker(QThread):
                 vol_str = (vol_elem.text or "").strip()
                 vol_format = "elem"
         if not vol_str or _vol_to_display(vol_str) <= threshold:
-            return
+            return None
 
         new_hex = _display_to_vol(threshold)
         text, enc = _read_xml(item.file_path)
@@ -171,21 +185,28 @@ class BatchWorker(QThread):
             new_tag = f'<volume>{new_hex}</volume>'
 
         new_pre = pre_block.replace(old_tag, new_tag, 1)
-        if new_pre != pre_block:
-            _write_xml(item.file_path, new_pre + post_block, enc)
+        if new_pre == pre_block:
+            return None
+        return PendingChange(
+            change_type=ChangeType.XML_EDIT,
+            file_path=item.file_path,
+            source_module="batch_hub",
+            new_content=new_pre + post_block,
+            encoding=enc,
+        )
 
-    def _do_cap_pad_volumes(self, item):
+    def _do_cap_pad_volumes(self, item) -> Optional[PendingChange]:
         """Begrenzt alle Pad-Volumes im Kit auf params['threshold']."""
         from ..core.xml_parser import _parse_xml_robust
-        from ..core.file_ops import _read_xml, _write_xml
+        from ..core.file_ops import _read_xml
         threshold = self.params.get("threshold", 40)
 
         root = _parse_xml_robust(item.file_path)
         if root is None:
-            return
+            return None
         sound_sources = root.find("soundSources")
         if sound_sources is None:
-            return
+            return None
 
         caps = []
         for sound in sound_sources.findall("sound"):
@@ -203,12 +224,12 @@ class BatchWorker(QThread):
                 caps.append((vol_str, _display_to_vol(threshold), vol_format))
 
         if not caps:
-            return
+            return None
 
         text, enc = _read_xml(item.file_path)
         sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
         if not sources_match:
-            return
+            return None
 
         block = sources_match.group(1)
         for current_hex, new_hex, fmt in caps:
@@ -221,12 +242,19 @@ class BatchWorker(QThread):
 
         s, e = sources_match.start(1), sources_match.end(1)
         new_text = text[:s] + block + text[e:]
-        if new_text != text:
-            _write_xml(item.file_path, new_text, enc)
+        if new_text == text:
+            return None
+        return PendingChange(
+            change_type=ChangeType.XML_EDIT,
+            file_path=item.file_path,
+            source_module="batch_hub",
+            new_content=new_text,
+            encoding=enc,
+        )
 
-    def _do_cap_clip_volumes(self, item):
+    def _do_cap_clip_volumes(self, item) -> Optional[PendingChange]:
         """Begrenzt alle Clip-Volumes (kitParams/synthParams) im Song auf params['threshold']."""
-        from ..core.file_ops import _read_xml, _write_xml
+        from ..core.file_ops import _read_xml
         threshold = self.params.get("threshold", 40)
 
         text, enc = _read_xml(item.file_path)
@@ -241,8 +269,15 @@ class BatchWorker(QThread):
             cap_vol,
             text,
         )
-        if new_text != text:
-            _write_xml(item.file_path, new_text, enc)
+        if new_text == text:
+            return None
+        return PendingChange(
+            change_type=ChangeType.XML_EDIT,
+            file_path=item.file_path,
+            source_module="batch_hub",
+            new_content=new_text,
+            encoding=enc,
+        )
 
 
 class BatchHubModule(QWidget):
@@ -252,6 +287,7 @@ class BatchHubModule(QWidget):
         super().__init__()
         self._index: Optional[SDCardIndex] = None
         self._worker = None
+        self._staging: Optional[StagingStore] = None
         self._build_ui()
 
     def _build_ui(self):
@@ -291,6 +327,13 @@ class BatchHubModule(QWidget):
         root.addSpacing(8)
         root.addWidget(self._progress)
         root.addWidget(self._status)
+
+        from ..widgets.pending_panel import PendingPanel
+        self._pending_panel = PendingPanel(
+            "batch_hub", StagingStore(),
+            rescan_fn=self.request_rescan.emit
+        )
+        root.addWidget(self._pending_panel)
 
     def _build_content_tab(self, content_type: str) -> QWidget:
         widget = QWidget()
@@ -553,6 +596,12 @@ class BatchHubModule(QWidget):
         return l
 
     # ── Public API ─────────────────────────────────────────────────────────
+    def set_staging(self, staging: StagingStore):
+        self._staging = staging
+        if hasattr(self, '_pending_panel'):
+            self._pending_panel._staging = staging
+            self._pending_panel.refresh()
+
     def update_index(self, index: SDCardIndex):
         self._index = index
         # Update unused count
@@ -640,13 +689,36 @@ class BatchHubModule(QWidget):
         self._worker.error.connect(lambda e: QMessageBox.warning(self, "Fehler", e))
         self._worker.start()
 
-    def _on_batch_done(self, result: dict):
+    def _on_batch_done(self, result: dict, pending: list):
         self._progress.setVisible(False)
-        self._status.setText(
-            f"✅  {result['success']}/{result['total']} erfolgreich"
-            + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
-        )
-        self.request_rescan.emit()
+        if self._staging and pending:
+            for c in pending:
+                self._staging.add(c)
+            self._pending_panel.refresh()
+            self._status.setText(
+                f"⏳  {len(pending)} Änderungen vorgemerkt  |  "
+                f"✅ {result['success']}/{result['total']}"
+                + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
+            )
+        else:
+            # Fallback: direkt anwenden wenn kein Staging konfiguriert
+            if pending:
+                from ..core.file_ops import _write_xml
+                for c in pending:
+                    try:
+                        if c.change_type == ChangeType.XML_EDIT:
+                            _write_xml(c.file_path, c.new_content, c.encoding)
+                        elif c.change_type == ChangeType.RENAME:
+                            c.file_path.rename(c.file_path.parent / c.new_name)
+                        elif c.change_type == ChangeType.DELETE:
+                            c.file_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            self._status.setText(
+                f"✅  {result['success']}/{result['total']} erfolgreich"
+                + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
+            )
+            self.request_rescan.emit()
 
     def _batch_import(self, source_folder: str, dest_subpath: str):
         if not self._index or not source_folder:
