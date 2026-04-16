@@ -18,6 +18,7 @@ from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Song
 from ..core.file_ops import update_xml_path
+from ..core.staging import StagingStore, PendingChange, ChangeType
 
 
 COL_NAME = 0
@@ -36,6 +37,7 @@ class SongManagerModule(QWidget):
         self._index: Optional[SDCardIndex] = None
         self._songs: list[Song] = []
         self._history = None
+        self._staging: Optional[StagingStore] = None
         self._build_ui()
 
     def _build_ui(self):
@@ -180,6 +182,13 @@ class SongManagerModule(QWidget):
         root.addSpacing(6)
         root.addWidget(self._status)
 
+        from ..widgets.pending_panel import PendingPanel
+        self._pending_panel = PendingPanel(
+            "song_manager", StagingStore(),
+            rescan_fn=self.request_rescan.emit
+        )
+        root.addWidget(self._pending_panel)
+
     def _lbl(self, text, obj=""):
         l = QLabel(text)
         if obj:
@@ -188,6 +197,12 @@ class SongManagerModule(QWidget):
 
     def set_history(self, history):
         self._history = history
+
+    def set_staging(self, staging: StagingStore):
+        self._staging = staging
+        if hasattr(self, '_pending_panel'):
+            self._pending_panel._staging = staging
+            self._pending_panel.refresh()
 
     def update_index(self, index: SDCardIndex):
         self._index = index
@@ -294,20 +309,22 @@ class SongManagerModule(QWidget):
         if new_path.exists():
             QMessageBox.warning(self, "Fehler", "Datei mit diesem Namen existiert bereits.")
             return
-        try:
-            song.file_path.rename(new_path)
-            self._status.setText(f"✅  Song umbenannt → {new_name}")
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _old, _new = song.file_path, new_path
-                self._history.push(Action(
-                    description=f"Song umbenannt: {song.name} → {new_name.strip()}",
-                    undo_fn=lambda o=_old, n=_new: n.rename(o),
-                    redo_fn=lambda o=_old, n=_new: o.rename(n),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.RENAME,
+                file_path=song.file_path,
+                source_module="song_manager",
+                new_name=f"{new_name.strip()}.XML",
+            ))
+            self._status.setText(f"⏳  Umbenennen vorgemerkt: {song.name} → {new_name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                song.file_path.rename(new_path)
+                self._status.setText(f"✅  Song umbenannt → {new_name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _duplicate_selected(self):
         song = self._selected_song()
@@ -336,17 +353,26 @@ class SongManagerModule(QWidget):
             return
         reply = QMessageBox.question(
             self, "Song löschen",
-            f"'{song.name}' wirklich löschen?\n(Nur die Song-Datei, keine Samples)",
+            f"'{song.name}' wirklich löschen?\n(Erst gespeichert wenn du 'Speichern' drückst)",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             return
-        try:
-            song.file_path.unlink()
-            self._status.setText(f"🗑  Gelöscht: {song.name}")
-            self.request_rescan.emit()
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.DELETE,
+                file_path=song.file_path,
+                source_module="song_manager",
+            ))
+            self._status.setText(f"⏳  Zum Löschen vorgemerkt: {song.name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                song.file_path.unlink()
+                self._status.setText(f"🗑  Gelöscht: {song.name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _export_selected(self):
         song = self._selected_song()
@@ -465,22 +491,27 @@ class SongManagerModule(QWidget):
             return
 
         new_text = new_pre + post_block
-        try:
-            _write_xml(song.file_path, new_text, enc)
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=song.file_path,
+                source_module="song_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
             self._status.setText(
-                f"✅  Song-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
+                f"⏳  Vorgemerkt: Song-Master {current_display:.1f}/50 → {threshold}/50."
             )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = song.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Song-Master begrenzt: {song.name} → {threshold}/50",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(song.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  Song-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _cap_clip_volumes(self):
         """
@@ -530,19 +561,22 @@ class SongManagerModule(QWidget):
             )
             return
 
-        try:
-            _write_xml(song.file_path, new_text, enc)
-            self._status.setText(
-                f"✅  Clip-Volumes auf max. {threshold}/50 begrenzt."
-            )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = song.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Clip-Vols. begrenzt: {song.name} → {threshold}/50",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=song.file_path,
+                source_module="song_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: Clip-Volumes auf max. {threshold}/50.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(song.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  Clip-Volumes auf max. {threshold}/50 begrenzt."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
