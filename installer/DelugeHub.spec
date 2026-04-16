@@ -2,7 +2,10 @@
 # PyInstaller spec file for DelugeHub
 # Run with: pyinstaller installer/DelugeHub.spec
 
+import os
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+ICON = os.path.join(SPECPATH, 'icon.ico')
 
 # Collect all PySide6 components needed
 datas_pyside, binaries_pyside, hiddenimports_pyside = collect_all('PySide6')
@@ -53,7 +56,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='installer/icon.ico',
+    icon=ICON,
 )
 
 coll = COLLECT(
