@@ -86,24 +86,45 @@ class PendingPanel(QFrame):
         self.setVisible(count > 0)
 
     def _on_save(self):
-        from PySide6.QtWidgets import QDialog, QRadioButton, QDialogButtonBox
+        from PySide6.QtWidgets import (
+            QDialog, QDialogButtonBox, QVBoxLayout, QLabel as _QLabel
+        )
 
-        # Einfacher Dialog: Original überschreiben oder Ordner wählen
-        reply = QMessageBox(self)
-        reply.setWindowTitle("Änderungen speichern")
-        reply.setText("Wo sollen die Änderungen gespeichert werden?")
-        btn_original = reply.addButton("Original überschreiben", QMessageBox.AcceptRole)
-        btn_export   = reply.addButton("In anderen Ordner exportieren…", QMessageBox.ActionRole)
-        reply.addButton("Abbrechen", QMessageBox.RejectRole)
-        reply.exec()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Änderungen speichern")
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        lbl = _QLabel("Wo sollen die Änderungen gespeichert werden?")
+        layout.addWidget(lbl)
+
+        btn_box = QDialogButtonBox()
+        btn_original = btn_box.addButton("Original überschreiben", QDialogButtonBox.AcceptRole)
+        btn_export   = btn_box.addButton("In anderen Ordner exportieren…", QDialogButtonBox.ActionRole)
+        btn_cancel   = btn_box.addButton("Abbrechen", QDialogButtonBox.RejectRole)
+        btn_box.rejected.connect(dlg.reject)
+        btn_original.clicked.connect(dlg.accept)
+        btn_export.clicked.connect(dlg.accept)
+        layout.addWidget(btn_box)
+
+        clicked = [None]
+
+        def _track(b):
+            clicked[0] = b
+
+        btn_original.clicked.connect(lambda: _track("original"))
+        btn_export.clicked.connect(lambda: _track("export"))
+
+        dlg.exec()
 
         dest_root = None
-        if reply.clickedButton() == btn_export:
+        if clicked[0] == "export":
             folder = QFileDialog.getExistingDirectory(self, "Zielordner wählen", "")
             if not folder:
                 return
             dest_root = Path(folder)
-        elif reply.clickedButton() != btn_original:
+        elif clicked[0] != "original":
             return
 
         success, failed = self._staging.apply_for_module(self._module, dest_root)
