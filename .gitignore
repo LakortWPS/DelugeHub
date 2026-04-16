@@ -37,3 +37,6 @@ desktop.ini
 # App-specific
 *.log
 *.tmp
+
+# Git worktrees
+.worktrees/
