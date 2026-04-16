@@ -369,10 +369,13 @@ class SynthEditorModule(QWidget):
         if idx >= 0:
             self._osc2_type.setCurrentIndex(idx)
 
-        # Load hex values from XML
+        # Load hex values from XML — nutzt _parse_xml_robust für Deluge-Firmware-Quirks
         try:
-            tree = ET.parse(synth.file_path)
-            root = tree.getroot()
+            from ..core.xml_parser import _parse_xml_robust
+            root = _parse_xml_robust(synth.file_path)
+            if root is None:
+                self._status.setText(f"XML konnte nicht geladen werden: {synth.name}")
+                return
 
             def get_val(path: str, default: float = 0.5) -> float:
                 el = root.find(path)
@@ -480,11 +483,14 @@ class SynthEditorModule(QWidget):
 
         try:
             from ..core.file_ops import _read_xml, _write_xml
+            from ..core.xml_parser import _parse_xml_robust
 
             # Pass 1: build a map of { old_hex_value: new_hex_value }
-            # by resolving each element via ElementTree.
-            tree = ET.parse(self._current_synth.file_path)
-            root = tree.getroot()
+            # Nutzt _parse_xml_robust statt ET.parse — unterstützt alle Deluge-Firmware-Quirks.
+            root = _parse_xml_robust(self._current_synth.file_path)
+            if root is None:
+                QMessageBox.warning(self, "Fehler", "XML konnte nicht gelesen werden.")
+                return
 
             replacements: list[tuple[str, str]] = []   # (old_hex, new_hex)
 

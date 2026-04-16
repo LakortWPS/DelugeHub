@@ -3,7 +3,8 @@ DelugeHub — Settings Module
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QFrame, QFileDialog, QComboBox, QCheckBox
+    QLineEdit, QFrame, QFileDialog, QComboBox, QCheckBox,
+    QScrollArea
 )
 from PySide6.QtCore import Qt, Signal
 from pathlib import Path
@@ -22,17 +23,32 @@ class SettingsModule(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(20)
+        # Äußeres Layout: nur Header + ScrollArea
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 0)
+        outer.setSpacing(0)
 
+        # --- Header (bleibt fest, scrollt nicht mit) ---
         title = QLabel("⚙️  Einstellungen")
         title.setObjectName("PageTitle")
         subtitle = QLabel("App-Konfiguration und Pfade")
         subtitle.setObjectName("PageSubtitle")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addSpacing(8)
+        outer.addWidget(title)
+        outer.addWidget(subtitle)
+        outer.addSpacing(16)
+
+        # --- ScrollArea für alle Karten ---
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 16, 24)
+        layout.setSpacing(20)
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
 
         # --- SD Card Path ---
         layout.addWidget(self._section("SD-CARD"))

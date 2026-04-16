@@ -102,14 +102,37 @@ class BatchWorker(QThread):
         shutil.copy2(str(item.file_path), str(dest_dir / item.file_path.name))
 
     def _do_normalize(self, item):
-        text = item.file_path.read_text(encoding="utf-8", errors="replace")
-        new_text = re.sub(
+        """
+        Setzt alle Pad-Volumes (nur innerhalb <soundSources>) auf Maximum (0x7FFFFFFF).
+        Nutzt _read_xml/_write_xml — bewahrt das originale Datei-Encoding.
+        Das Kit-Master-Volume außerhalb von <soundSources> bleibt unberührt.
+        """
+        from ..core.file_ops import _read_xml, _write_xml
+        text, enc = _read_xml(item.file_path)
+
+        # Nur den <soundSources>-Block bearbeiten
+        sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
+        if not sources_match:
+            return  # kein soundSources-Block (z.B. Synth-Datei) — nichts tun
+
+        block = sources_match.group(1)
+        # Element-Form: <volume>0x…</volume>
+        block = re.sub(
             r'(<volume>)\s*0x[0-9A-Fa-f]+\s*(</volume>)',
             r'\g<1>0x7FFFFFFF\2',
-            text
+            block,
         )
+        # Attribut-Form: volume="0x…"
+        block = re.sub(
+            r'(volume=")0x[0-9A-Fa-f]+(")',
+            r'\g<1>0x7FFFFFFF\2',
+            block,
+        )
+
+        s, e = sources_match.start(1), sources_match.end(1)
+        new_text = text[:s] + block + text[e:]
         if new_text != text:
-            item.file_path.write_text(new_text, encoding="utf-8")
+            _write_xml(item.file_path, new_text, enc)
 
     def _do_cap_kit_master(self, item):
         """Begrenzt Kit-Master-Volume auf params['threshold']."""
@@ -723,7 +746,11 @@ class BatchHubModule(QWidget):
             d = self._index.root_path / folder
             if not d.exists():
                 continue
-            for xml in d.rglob("*.XML"):
+            # Beide Schreibweisen abdecken (FAT32-SD-Cards: meist .XML, Linux: evtl. .xml)
+            xml_files = list(d.rglob("*.XML")) + [
+                f for f in d.rglob("*.xml") if f.suffix == ".xml"
+            ]
+            for xml in xml_files:
                 total += 1
                 try:
                     ET.parse(xml)
@@ -762,7 +789,10 @@ class BatchHubModule(QWidget):
             d = self._index.root_path / folder
             if not d.exists():
                 continue
-            for xml in d.rglob("*.XML"):
+            xml_files = list(d.rglob("*.XML")) + [
+                f for f in d.rglob("*.xml") if f.suffix == ".xml"
+            ]
+            for xml in xml_files:
                 from ..core.file_ops import update_xml_path
                 if update_xml_path(xml, find_text, replace_text):
                     modified += 1

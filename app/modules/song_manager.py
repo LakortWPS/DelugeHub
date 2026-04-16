@@ -342,18 +342,9 @@ class SongManagerModule(QWidget):
         if reply != QMessageBox.Yes:
             return
         try:
-            from ..core.history import move_to_trash, restore_from_trash, Action
-            original_path = song.file_path
-            state = [move_to_trash(original_path)]
+            song.file_path.unlink()
             self._status.setText(f"🗑  Gelöscht: {song.name}")
             self.request_rescan.emit()
-            if self._history:
-                _op = original_path
-                self._history.push(Action(
-                    description=f"Song gelöscht: {song.name}",
-                    undo_fn=lambda s=state, op=_op: restore_from_trash(s[0], op),
-                    redo_fn=lambda s=state, op=_op: s.__setitem__(0, move_to_trash(op)),
-                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
