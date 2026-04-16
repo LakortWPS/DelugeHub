@@ -23,7 +23,7 @@ from ..core.models import SDCardIndex, Synth
 from ..core.staging import StagingStore, PendingChange, ChangeType
 
 
-# ── Deluge value helpers ───────────────────────────────────────────────────
+# ── Deluge value helpers ─────────────────────────────────────────────────
 def hex_to_norm(hex_str: str) -> float:
     """Convert Deluge hex param (0x00000000–0xFFFFFFFF) to 0.0–1.0."""
     try:
@@ -43,7 +43,7 @@ def rand_hex(lo: float = 0.0, hi: float = 1.0) -> str:
     return norm_to_hex(random.uniform(lo, hi))
 
 
-# ── Param slider widget ────────────────────────────────────────────────────
+# ── Param slider widget ─────────────────────────────────────────────────────
 class ParamSlider(QWidget):
     valueChanged = Signal(float)  # normalized 0-1
 
@@ -75,7 +75,7 @@ class ParamSlider(QWidget):
         self._slider.setValue(int(max(0, min(1, val)) * 1000))
 
 
-# ── Synth Editor ───────────────────────────────────────────────────────────
+# ── Synth Editor ────────────────────────────────────────────────────────
 class SynthEditorModule(QWidget):
     request_rescan = Signal()
 
@@ -379,7 +379,6 @@ class SynthEditorModule(QWidget):
 
     def _load_params(self, synth: Synth):
         self._synth_title.setText(f"🎹  {synth.name}")
-        # Set OSC types
         idx = self._osc1_type.findText(synth.osc1_type)
         if idx >= 0:
             self._osc1_type.setCurrentIndex(idx)
@@ -387,7 +386,7 @@ class SynthEditorModule(QWidget):
         if idx >= 0:
             self._osc2_type.setCurrentIndex(idx)
 
-        # Load hex values from XML — nutzt _parse_xml_robust für Deluge-Firmware-Quirks
+        # Nutzt _parse_xml_robust für Deluge-Firmware-Quirks
         try:
             from ..core.xml_parser import _parse_xml_robust
             root = _parse_xml_robust(synth.file_path)
@@ -401,18 +400,6 @@ class SynthEditorModule(QWidget):
                     text = el.text or el.get("value", "")
                     if text.startswith("0x") or text.startswith("0X"):
                         return hex_to_norm(text)
-                return default
-
-            def get_attr(elem_path: str, attr: str, default: float = 0.5) -> float:
-                el = root.find(elem_path)
-                if el is not None:
-                    val = el.get(attr, "")
-                    if val.startswith("0x"):
-                        return hex_to_norm(val)
-                    try:
-                        return float(val)
-                    except ValueError:
-                        pass
                 return default
 
             mappings = {
@@ -442,7 +429,6 @@ class SynthEditorModule(QWidget):
                     val = get_val(xml_path, 0.5)
                     self._param_sliders[key].set_value(val)
 
-            # Filter type
             ft_el = root.find(".//lpf")
             if ft_el is not None:
                 mode = ft_el.get("mode", "0")
@@ -452,7 +438,6 @@ class SynthEditorModule(QWidget):
                 if idx >= 0:
                     self._filter_type.setCurrentIndex(idx)
 
-            # LFO shape
             lfo_el = root.find(".//lfo1/shape")
             if lfo_el is not None and lfo_el.text:
                 idx = self._lfo1_shape.findText(lfo_el.text.strip())
@@ -463,19 +448,9 @@ class SynthEditorModule(QWidget):
             self._status.setText(f"XML lesen fehlgeschlagen: {e}")
 
     def _save_params(self):
-        """
-        Save slider values back to the XML file.
-
-        Uses a two-pass strategy to avoid ambiguous tag collisions:
-          1. Parse with ElementTree to resolve each full XPath to its
-             current hex value (guarantees we touch the right element).
-          2. Replace that specific hex string in the raw text so we never
-             reformat the document structure — the Deluge reads it as-is.
-        """
         if not self._current_synth:
             return
 
-        # Full XPath mappings — every path is unique, no tag collision.
         mappings: dict[str, str] = {
             "osc1_volume":     ".//osc1/volume",
             "osc1_transpose":  ".//osc1/transpose",
@@ -503,14 +478,13 @@ class SynthEditorModule(QWidget):
             from ..core.file_ops import _read_xml, _write_xml
             from ..core.xml_parser import _parse_xml_robust
 
-            # Pass 1: build a map of { old_hex_value: new_hex_value }
-            # Nutzt _parse_xml_robust statt ET.parse — unterstützt alle Deluge-Firmware-Quirks.
+            # Nutzt _parse_xml_robust statt ET.parse — unterstützt alle Deluge-Firmware-Quirks
             root = _parse_xml_robust(self._current_synth.file_path)
             if root is None:
                 QMessageBox.warning(self, "Fehler", "XML konnte nicht gelesen werden.")
                 return
 
-            replacements: list[tuple[str, str]] = []   # (old_hex, new_hex)
+            replacements: list[tuple[str, str]] = []
 
             for key, xpath in mappings.items():
                 if key not in self._param_sliders:
@@ -520,7 +494,7 @@ class SynthEditorModule(QWidget):
                     continue
                 old_hex = (el.text or "").strip()
                 if not (old_hex.lower().startswith("0x")):
-                    continue   # not a hex param — skip
+                    continue
                 new_val = self._param_sliders[key]._slider.value() / 1000.0
                 new_hex = norm_to_hex(new_val)
                 if old_hex != new_hex:
@@ -530,12 +504,8 @@ class SynthEditorModule(QWidget):
                 self._status.setText(f"ℹ  Keine Änderungen: {self._current_synth.name}")
                 return
 
-            # Pass 2: targeted text replacement — preserves file structure
-            # and encoding completely.
             text, enc = _read_xml(self._current_synth.file_path)
             for old_hex, new_hex in replacements:
-                # Replace only the first occurrence to avoid accidentally
-                # touching unrelated elements that share the same value.
                 text = text.replace(old_hex, new_hex, 1)
 
             if self._staging:
@@ -556,7 +526,6 @@ class SynthEditorModule(QWidget):
             QMessageBox.warning(self, "Fehler", f"Speichern fehlgeschlagen: {e}")
 
     def _randomize(self):
-        """Create a new random synth based on current selected as template."""
         if not self._current_synth or not self._index:
             return
         new_name, ok = QInputDialog.getText(
@@ -575,7 +544,6 @@ class SynthEditorModule(QWidget):
             from ..core.file_ops import _read_xml, _write_xml
             text, enc = _read_xml(self._current_synth.file_path)
 
-            # Randomize all hex value fields in-place.
             rand_tags = [
                 "frequency", "resonance", "attack", "decay", "sustain", "release",
                 "rate", "pan"
@@ -588,7 +556,6 @@ class SynthEditorModule(QWidget):
                     text
                 )
 
-            # Randomize OSC type (first occurrence only).
             osc_types = ["square", "sine", "saw", "triangle"]
             new_type = random.choice(osc_types)
             text = re.sub(r'(<type>)(square|sine|saw|triangle)(</type>)',
@@ -706,3 +673,4 @@ class SynthEditorModule(QWidget):
             self.request_rescan.emit()
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
