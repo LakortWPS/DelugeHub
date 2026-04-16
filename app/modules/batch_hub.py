@@ -21,7 +21,7 @@ from PySide6.QtGui import QColor
 from ..core.models import SDCardIndex
 
 
-# ── Deluge volume helpers (module-level, used by BatchWorker) ───────────────
+# ── Deluge volume helpers (module-level, used by BatchWorker) ───────────────────────
 
 def _vol_to_display(hex_str: str) -> float:
     """Deluge hex volume string → display value 0–50."""
@@ -269,18 +269,14 @@ class BatchHubModule(QWidget):
         root.addLayout(hdr)
         root.addSpacing(14)
 
-        # Tabs for different content types
         tabs = QTabWidget()
-
         tabs.addTab(self._build_content_tab("songs"), "🎵 Songs")
         tabs.addTab(self._build_content_tab("kits"), "🥁 Kits")
         tabs.addTab(self._build_content_tab("synths"), "🎹 Synths")
         tabs.addTab(self._build_sample_tab(), "📁 Samples")
         tabs.addTab(self._build_xml_tab(), "🔧 XML Tools")
-
         root.addWidget(tabs, 1)
 
-        # Progress + status
         self._progress = QProgressBar()
         self._progress.setFixedHeight(8)
         self._progress.setVisible(False)
@@ -299,7 +295,6 @@ class BatchHubModule(QWidget):
         layout.setContentsMargins(8, 12, 8, 8)
         layout.setSpacing(8)
 
-        # Operation selector
         ops_frame = QFrame()
         ops_frame.setObjectName("Card")
         ops_layout = QVBoxLayout(ops_frame)
@@ -328,7 +323,6 @@ class BatchHubModule(QWidget):
         op_row.addStretch()
         ops_layout.addLayout(op_row)
 
-        # Rename pattern (shown when rename selected)
         pattern_row = QHBoxLayout()
         pattern_lbl = QLabel("Muster:")
         pattern_lbl.setFixedWidth(100)
@@ -348,10 +342,8 @@ class BatchHubModule(QWidget):
 
         op_combo.currentIndexChanged.connect(toggle_pattern)
         toggle_pattern(0)
-
         layout.addWidget(ops_frame)
 
-        # Item list with checkboxes
         item_table = QTableWidget(0, 2)
         item_table.setHorizontalHeaderLabels(["✓ Auswählen", "Name"])
         item_table.verticalHeader().setVisible(False)
@@ -362,7 +354,6 @@ class BatchHubModule(QWidget):
         item_table.setAlternatingRowColors(True)
         layout.addWidget(item_table, 1)
 
-        # Bottom buttons
         btn_row = QHBoxLayout()
         sel_all_btn = QPushButton("Alle auswählen")
         sel_all_btn.setObjectName("SecondaryButton")
@@ -370,10 +361,8 @@ class BatchHubModule(QWidget):
         sel_none_btn = QPushButton("Keine")
         sel_none_btn.setObjectName("SecondaryButton")
         sel_none_btn.setFixedHeight(32)
-
         run_btn = QPushButton(f"⚡  Ausführen")
         run_btn.setFixedHeight(36)
-
         btn_row.addWidget(sel_all_btn)
         btn_row.addWidget(sel_none_btn)
         btn_row.addStretch()
@@ -408,10 +397,8 @@ class BatchHubModule(QWidget):
         sel_none_btn.clicked.connect(sel_none)
         run_btn.clicked.connect(run_batch)
 
-        # Store references for update_index
         widget._item_table = item_table
         widget._op_combo = op_combo
-
         return widget
 
     def _build_sample_tab(self) -> QWidget:
@@ -420,7 +407,6 @@ class BatchHubModule(QWidget):
         layout.setContentsMargins(8, 12, 8, 8)
         layout.setSpacing(8)
 
-        # Batch import
         import_group = QGroupBox("Batch Import")
         import_group.setStyleSheet("QGroupBox { font-weight: bold; color: #1E6FBB; border: 1px solid #0F3460; border-radius: 6px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }")
         import_layout = QVBoxLayout(import_group)
@@ -450,43 +436,33 @@ class BatchHubModule(QWidget):
         import_browse.clicked.connect(lambda: import_folder_edit.setText(
             QFileDialog.getExistingDirectory(widget, "Quell-Ordner wählen", "") or import_folder_edit.text()
         ))
-
         layout.addWidget(import_group)
 
-        # Batch export
         export_group = QGroupBox("Batch Export")
         export_group.setStyleSheet(import_group.styleSheet())
         export_layout = QVBoxLayout(export_group)
         export_layout.setContentsMargins(12, 8, 12, 8)
-
         export_info = QLabel("Alle genutzten Samples mit Ordnerstruktur exportieren:")
         export_info.setStyleSheet("color: #888888; font-size: 12px;")
         export_layout.addWidget(export_info)
-
         export_btn = QPushButton("📦  Alle Samples exportieren")
         export_btn.clicked.connect(self._batch_export_samples)
         export_layout.addWidget(export_btn)
-
         layout.addWidget(export_group)
 
-        # Delete unused
         unused_group = QGroupBox("Ungenutzte Samples löschen")
         unused_group.setStyleSheet(import_group.styleSheet())
         unused_layout = QVBoxLayout(unused_group)
         unused_layout.setContentsMargins(12, 8, 12, 8)
-
         self._unused_count_lbl = QLabel("— ungenutzte Samples")
         self._unused_count_lbl.setStyleSheet("color: #E67E22;")
         unused_layout.addWidget(self._unused_count_lbl)
-
         del_unused_btn = QPushButton("🗑  Ungenutzte löschen")
         del_unused_btn.setObjectName("DangerButton")
         del_unused_btn.clicked.connect(self._delete_unused_samples)
         unused_layout.addWidget(del_unused_btn)
-
         layout.addWidget(unused_group)
         layout.addStretch()
-
         return widget
 
     def _build_xml_tab(self) -> QWidget:
@@ -495,54 +471,44 @@ class BatchHubModule(QWidget):
         layout.setContentsMargins(8, 12, 8, 8)
         layout.setSpacing(8)
 
-        # Validate all XMLs
         validate_group = QGroupBox("XML Validierung")
         validate_group.setStyleSheet("QGroupBox { font-weight: bold; color: #1E6FBB; border: 1px solid #0F3460; border-radius: 6px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; }")
         v_layout = QVBoxLayout(validate_group)
         v_layout.setContentsMargins(12, 8, 12, 8)
         v_layout.setSpacing(6)
-
         v_layout.addWidget(QLabel("Alle SONGS/KITS/SYNTHS XML-Dateien auf Parse-Fehler prüfen:"))
-
         self._validate_result = QLabel("—")
         self._validate_result.setWordWrap(True)
         self._validate_result.setStyleSheet("font-size: 12px; color: #888888;")
         v_layout.addWidget(self._validate_result)
-
         validate_btn = QPushButton("🔍  Alle XMLs prüfen")
         validate_btn.clicked.connect(self._validate_all_xmls)
         v_layout.addWidget(validate_btn)
         layout.addWidget(validate_group)
 
-        # Global path find & replace
         replace_group = QGroupBox("Pfad Suchen & Ersetzen")
         replace_group.setStyleSheet(validate_group.styleSheet())
         r_layout = QVBoxLayout(replace_group)
         r_layout.setContentsMargins(12, 8, 12, 8)
         r_layout.setSpacing(6)
-
         r_layout.addWidget(QLabel("Pfadstring in ALLEN XML-Dateien ersetzen:"))
-
         find_row = QHBoxLayout()
         find_row.addWidget(QLabel("Suchen:"))
         self._find_edit = QLineEdit()
         self._find_edit.setPlaceholderText("z.B. SAMPLES/OldFolder/")
         find_row.addWidget(self._find_edit)
         r_layout.addLayout(find_row)
-
         repl_row = QHBoxLayout()
         repl_row.addWidget(QLabel("Ersetzen:"))
         self._replace_edit = QLineEdit()
         self._replace_edit.setPlaceholderText("z.B. SAMPLES/NewFolder/")
         repl_row.addWidget(self._replace_edit)
         r_layout.addLayout(repl_row)
-
         replace_btn = QPushButton("🔄  Ersetzen in allen XMLs")
         replace_btn.setObjectName("SuccessButton")
         replace_btn.clicked.connect(self._global_replace)
         r_layout.addWidget(replace_btn)
         layout.addWidget(replace_group)
-
         layout.addStretch()
         return widget
 
@@ -552,14 +518,11 @@ class BatchHubModule(QWidget):
             l.setObjectName(obj)
         return l
 
-    # ── Public API ─────────────────────────────────────────────────────────
     def update_index(self, index: SDCardIndex):
         self._index = index
-        # Update unused count
         unused = len(index.unused_samples)
         self._unused_count_lbl.setText(f"{unused} ungenutzte Samples ({sum(s.size_mb for s in index.unused_samples):.1f} MB)")
 
-        # Update tab tables
         tabs_widget = self.findChild(QTabWidget)
         if not tabs_widget:
             return
@@ -569,7 +532,7 @@ class BatchHubModule(QWidget):
             "kits": index.kits,
             "synths": index.synths,
         }
-        for i in range(tabs_widget.count() - 2):  # exclude sample + xml tabs
+        for i in range(tabs_widget.count() - 2):
             tab = tabs_widget.widget(i)
             ct = tab.property("content_type")
             if ct and hasattr(tab, "_item_table"):
@@ -586,7 +549,6 @@ class BatchHubModule(QWidget):
                     name_item.setData(Qt.UserRole, item)
                     table.setItem(row, 1, name_item)
 
-    # ── Batch operations ───────────────────────────────────────────────────
     def _run_batch(self, items: list, operation_text: str, pattern: str = ""):
         if not items:
             return
@@ -718,7 +680,7 @@ class BatchHubModule(QWidget):
         total_mb = sum(s.size_mb for s in unused)
         reply = QMessageBox.warning(
             self, "Ungenutzte löschen",
-            f"{len(unused)} ungenutzte Samples ({total_mb:.1f} MB) löschen?\n\nDiese Aktion kann nicht rückgängig gemacht werden!",
+            f"{len(unused)} ungenutzte Samples ({total_mb:.1f} MB) löschen?\n\nDiese Aktion kann nicht rükgängig gemacht werden!",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:

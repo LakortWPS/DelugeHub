@@ -396,11 +396,6 @@ class SongManagerModule(QWidget):
         return f"0x{v & 0xFFFFFFFF:08X}"
 
     def _cap_song_master(self):
-        """
-        Begrenzt den Song-Master-Volume (songParams/volume) auf einen
-        vom User eingegebenen Maximalwert (0–50).
-        Nur Werte ÜBER dem Limit werden angepasst — leisere bleiben unberührt.
-        """
         song = self._selected_song()
         if not song:
             return
@@ -448,7 +443,6 @@ class SongManagerModule(QWidget):
         new_hex = self._display_to_vol(threshold)
         text, enc = _read_xml(song.file_path)
 
-        # Nur im Bereich VOR <sessionClips> ersetzen — Clip-Volumes niemals berühren
         clips_pos = text.find('<sessionClips>')
         pre_block  = text[:clips_pos] if clips_pos >= 0 else text
         post_block = text[clips_pos:] if clips_pos >= 0 else ""
@@ -483,12 +477,6 @@ class SongManagerModule(QWidget):
             QMessageBox.warning(self, "Fehler", str(e))
 
     def _cap_clip_volumes(self):
-        """
-        Begrenzt alle Clip-Volumes (kitParams/volume und synthParams/volume) auf einen
-        vom User eingegebenen Maximalwert (0–50).
-        Nur Werte ÜBER dem Limit werden angepasst.
-        Interne Sound-Volumes (defaultParams) und songParams bleiben unberührt.
-        """
         import re
 
         song = self._selected_song()
@@ -516,8 +504,6 @@ class SongManagerModule(QWidget):
                 return m.group(1) + f'volume="{display_to_vol(threshold)}"'
             return m.group(0)
 
-        # Nur <kitParams> und <synthParams> volume-Attribute anpassen —
-        # niemals <defaultParams> (Pad/Sound-Volumes) oder <songParams> berühren
         new_text = re.sub(
             r'(<(?:kitParams|synthParams)\b[^>]*)volume="(0x[0-9A-Fa-f]+)"',
             cap_volume,
