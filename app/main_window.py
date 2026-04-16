@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, QEvent
 
 from .theme import get_theme
 from .core.sd_scanner import ScanWorker
+from .core.staging import StagingStore
 from .modules.dashboard import DashboardModule
 from .modules.lost_sample_finder import LostSampleFinderModule
 from .modules.sample_manager import SampleManagerModule
@@ -80,6 +81,7 @@ class MainWindow(QMainWindow):
         self._scan_worker = None
         self._nav_buttons: dict[str, NavButton] = {}
         self._sidebar_collapsed = False
+        self._staging = StagingStore()
 
         self._build_ui()
         self._apply_theme(self._current_theme)
@@ -309,8 +311,18 @@ class MainWindow(QMainWindow):
         self._progress_bar.setFixedHeight(8)
         self._progress_bar.setVisible(False)
 
+        self._pending_lbl = QLabel("Keine ausstehenden Änderungen")
+        self._pending_lbl.setObjectName("StatusLabel")
+
+        self._save_all_btn = QPushButton("💾 Alle speichern")
+        self._save_all_btn.setFixedHeight(24)
+        self._save_all_btn.setVisible(False)
+        self._save_all_btn.clicked.connect(self._save_all_pending)
+
         layout.addWidget(self._status_label)
         layout.addStretch()
+        layout.addWidget(self._pending_lbl)
+        layout.addWidget(self._save_all_btn)
         layout.addWidget(self._progress_bar)
         return bar
 
@@ -331,14 +343,17 @@ class MainWindow(QMainWindow):
         songs = reg("song_manager", SongManagerModule())
         songs.request_rescan.connect(self._trigger_scan)
         songs.navigate_to.connect(self._navigate)
+        songs.set_staging(self._staging)
 
         # Kit Manager
         kits = reg("kit_manager", KitManagerModule())
         kits.request_rescan.connect(self._trigger_scan)
+        kits.set_staging(self._staging)
 
         # Synth Editor
         synths = reg("synth_editor", SynthEditorModule())
         synths.request_rescan.connect(self._trigger_scan)
+        synths.set_staging(self._staging)
 
         # Sample Manager
         samples = reg("sample_manager", SampleManagerModule())
@@ -351,6 +366,7 @@ class MainWindow(QMainWindow):
         # Batch Hub
         batch = reg("batch_hub", BatchHubModule())
         batch.request_rescan.connect(self._trigger_scan)
+        batch.set_staging(self._staging)
 
         # Backup & Sync
         backup = reg("backup_sync", BackupSyncModule())
@@ -386,6 +402,9 @@ class MainWindow(QMainWindow):
         backup = self._modules.get("backup_sync")
         if backup:
             backup.set_sd_root(path)
+        sd_root = Path(path)
+        self._staging.set_sd_root(sd_root)
+        self._check_pending_on_startup(sd_root)
         self._save_settings()
         self._start_scan(path)
 
@@ -460,6 +479,54 @@ class MainWindow(QMainWindow):
     def _on_auto_scan_changed(self, enabled: bool):
         self._settings["auto_scan"] = enabled
         self._save_settings()
+
+    # ── Staging ────────────────────────────────────────────────────────────
+    def _refresh_pending_badge(self):
+        count = self._staging.count()
+        if count == 0:
+            self._pending_lbl.setText("Keine ausstehenden Änderungen")
+            self._save_all_btn.setVisible(False)
+        else:
+            self._pending_lbl.setText(f"⏳ {count} Änderung{'en' if count != 1 else ''} ausstehend")
+            self._save_all_btn.setVisible(True)
+
+    def _save_all_pending(self):
+        reply = QMessageBox(self)
+        reply.setWindowTitle("Alle Änderungen speichern")
+        reply.setText(f"{self._staging.count()} Änderungen speichern?")
+        btn_original = reply.addButton("Original überschreiben", QMessageBox.AcceptRole)
+        btn_export   = reply.addButton("In anderen Ordner exportieren…", QMessageBox.ActionRole)
+        reply.addButton("Abbrechen", QMessageBox.RejectRole)
+        reply.exec()
+
+        dest_root = None
+        if reply.clickedButton() == btn_export:
+            folder = QFileDialog.getExistingDirectory(self, "Zielordner wählen", "")
+            if not folder:
+                return
+            dest_root = Path(folder)
+        elif reply.clickedButton() != btn_original:
+            return
+
+        success, failed = self._staging.apply_all(dest_root)
+        self._refresh_pending_badge()
+        self._trigger_scan()
+        QMessageBox.information(self, "Gespeichert",
+            f"✅ {success} gespeichert." + (f"  ⚠ {failed} Fehler." if failed else ""))
+
+    def _check_pending_on_startup(self, sd_root: Path):
+        if self._staging.load_from_disk(sd_root):
+            count = self._staging.count()
+            reply = QMessageBox.question(
+                self, "Gespeicherte Änderungen",
+                f"Es gibt {count} Änderungen aus der letzten Session.\n"
+                "Wiederherstellen oder verwerfen?",
+                QMessageBox.RestoreDefaults | QMessageBox.Discard
+            )
+            if reply == QMessageBox.Discard:
+                self._staging.clear_all()
+                self._staging.delete_disk_file()
+            self._refresh_pending_badge()
 
     # ── Theme ──────────────────────────────────────────────────────────────
     def _toggle_theme(self):
