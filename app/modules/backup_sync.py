@@ -63,41 +63,36 @@ class BackupSyncModule(QWidget):
         root.setContentsMargins(28, 24, 28, 16)
         root.setSpacing(0)
 
+        # Header + Backup-Ordner inline
         hdr = QHBoxLayout()
+        hdr.setSpacing(16)
+
         col = QVBoxLayout()
-        col.setSpacing(4)
+        col.setSpacing(2)
         col.addWidget(self._lbl("💾  Backup & Sync", "PageTitle"))
         col.addWidget(self._lbl("SD-Card sichern, Verlauf verwalten, selektiv wiederherstellen", "PageSubtitle"))
         hdr.addLayout(col)
+
         hdr.addStretch()
-        root.addLayout(hdr)
-        root.addSpacing(14)
 
-        # Config card
-        config = QFrame()
-        config.setObjectName("Card")
-        config_layout = QVBoxLayout(config)
-        config_layout.setContentsMargins(16, 12, 16, 12)
-        config_layout.setSpacing(8)
-
-        config_layout.addWidget(self._lbl("KONFIGURATION", "SectionTitle"))
-
-        # Backup dir
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(QLabel("Backup-Ordner:"))
+        dir_lbl = QLabel("Backup-Ordner:")
+        dir_lbl.setStyleSheet("color: #888888; font-size: 12px;")
         self._backup_dir_edit = QLineEdit()
         self._backup_dir_edit.setPlaceholderText("Ziel-Ordner für Backups…")
+        self._backup_dir_edit.setFixedWidth(280)
+        self._backup_dir_edit.setFixedHeight(28)
         self._backup_dir_edit.textChanged.connect(self._on_backup_dir_changed)
         dir_browse = QPushButton("…")
         dir_browse.setObjectName("SecondaryButton")
-        dir_browse.setFixedWidth(36)
+        dir_browse.setFixedSize(28, 28)
         dir_browse.clicked.connect(self._browse_backup_dir)
-        dir_row.addWidget(self._backup_dir_edit)
-        dir_row.addWidget(dir_browse)
-        config_layout.addLayout(dir_row)
 
-        root.addWidget(config)
-        root.addSpacing(12)
+        hdr.addWidget(dir_lbl)
+        hdr.addWidget(self._backup_dir_edit)
+        hdr.addWidget(dir_browse)
+
+        root.addLayout(hdr)
+        root.addSpacing(10)
 
         # Main splitter (horizontal: left panel | right panel)
         splitter = QSplitter(Qt.Horizontal)
