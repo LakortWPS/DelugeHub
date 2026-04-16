@@ -210,12 +210,6 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        self._theme_btn = QPushButton("🌙")
-        self._theme_btn.setObjectName("IconButton")
-        self._theme_btn.setFixedSize(36, 36)
-        self._theme_btn.setToolTip("Theme wechseln")
-        self._theme_btn.clicked.connect(self._toggle_theme)
-        layout.addWidget(self._theme_btn)
 
         return bar
 
@@ -537,7 +531,6 @@ class MainWindow(QMainWindow):
         self._current_theme = theme
         self._settings["theme"] = theme
         QApplication.instance().setStyleSheet(get_theme(theme))
-        self._theme_btn.setText("☀️" if theme == "dark" else "🌙")
         self._save_settings()
 
     # ── Cleanup ────────────────────────────────────────────────────────────
