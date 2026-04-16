@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QProgressBar, QApplication, QFrame, QMessageBox
 )
 from PySide6.QtCore import Qt, QEvent
+from PySide6.QtGui import QIcon
 
 from .theme import get_theme
 from .core.sd_scanner import ScanWorker
@@ -74,6 +75,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DelugeHub")
         self.setMinimumSize(1100, 700)
         self.resize(1300, 820)
+
+        _icon_path = Path(__file__).parent.parent / "installer" / "icon.ico"
+        if _icon_path.exists():
+            self.setWindowIcon(QIcon(str(_icon_path)))
 
         self._settings = self._load_settings()
         self._current_theme = self._settings.get("theme", "dark")

@@ -53,7 +53,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon='installer/icon.ico',   # uncomment when icon is available
+    icon='installer/icon.ico',
 )
 
 coll = COLLECT(
