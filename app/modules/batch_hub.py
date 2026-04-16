@@ -388,12 +388,12 @@ class BatchHubModule(QWidget):
         layout.addWidget(ops_frame)
 
         item_table = QTableWidget(0, 2)
-        item_table.setHorizontalHeaderLabels(["✓ Auswählen", "Name"])
+        item_table.setHorizontalHeaderLabels(["✓", "Name"])
         item_table.verticalHeader().setVisible(False)
         hv = item_table.horizontalHeader()
         hv.setSectionResizeMode(0, QHeaderView.Fixed)
         hv.setSectionResizeMode(1, QHeaderView.Stretch)
-        item_table.setColumnWidth(0, 40)
+        item_table.setColumnWidth(0, 30)
         item_table.setAlternatingRowColors(True)
         layout.addWidget(item_table, 1)
 
