@@ -15,7 +15,7 @@ APP_VERSION = "2.0.2"
 class SettingsModule(QWidget):
     sd_path_changed = Signal(str)
     theme_changed = Signal(str)
-    auto_scan_changed = Signal(bool)
+    auto_scan_changed = Signal(bool)   # ← was missing, auto_scan was never saved
 
     def __init__(self, settings: dict):
         super().__init__()
@@ -106,6 +106,7 @@ class SettingsModule(QWidget):
 
         self._auto_scan_cb = QCheckBox("Beim Start automatisch scannen")
         self._auto_scan_cb.setChecked(self._settings.get("auto_scan", False))
+        # Emit signal immediately when toggled so MainWindow can persist it.
         self._auto_scan_cb.toggled.connect(self._on_auto_scan_toggled)
         scan_layout.addWidget(self._auto_scan_cb)
 
@@ -161,4 +162,5 @@ class SettingsModule(QWidget):
         return {
             "sd_path": self._sd_input.text().strip(),
             "theme": self._theme_combo.currentText().lower(),
-            "auto_scan": sel
+            "auto_scan": self._auto_scan_cb.isChecked(),
+        }
