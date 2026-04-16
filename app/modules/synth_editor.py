@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Synth
+from ..core.staging import StagingStore, PendingChange, ChangeType
 
 
 # ── Deluge value helpers ───────────────────────────────────────────────────
@@ -84,6 +85,7 @@ class SynthEditorModule(QWidget):
         self._synths: list[Synth] = []
         self._current_synth: Optional[Synth] = None
         self._param_sliders: dict[str, ParamSlider] = {}
+        self._staging: Optional[StagingStore] = None
         self._build_ui()
 
     def _build_ui(self):
@@ -201,6 +203,13 @@ class SynthEditorModule(QWidget):
         root.addSpacing(6)
         root.addWidget(self._status)
 
+        from ..widgets.pending_panel import PendingPanel
+        self._pending_panel = PendingPanel(
+            "synth_editor", StagingStore(),
+            rescan_fn=self.request_rescan.emit
+        )
+        root.addWidget(self._pending_panel)
+
     def _build_param_editor(self):
         layout = self._param_layout
 
@@ -316,6 +325,12 @@ class SynthEditorModule(QWidget):
         return l
 
     # ── Public API ─────────────────────────────────────────────────────────
+    def set_staging(self, staging: StagingStore):
+        self._staging = staging
+        if hasattr(self, '_pending_panel'):
+            self._pending_panel._staging = staging
+            self._pending_panel.refresh()
+
     def update_index(self, index: SDCardIndex):
         self._index = index
         self._synths = index.synths
@@ -520,8 +535,19 @@ class SynthEditorModule(QWidget):
                 # touching unrelated elements that share the same value.
                 text = text.replace(old_hex, new_hex, 1)
 
-            _write_xml(self._current_synth.file_path, text, enc)
-            self._status.setText(f"✅  Gespeichert: {self._current_synth.name}")
+            if self._staging:
+                self._staging.add(PendingChange(
+                    change_type=ChangeType.XML_EDIT,
+                    file_path=self._current_synth.file_path,
+                    source_module="synth_editor",
+                    new_content=text,
+                    encoding=enc,
+                ))
+                self._status.setText(f"⏳  Vorgemerkt: {self._current_synth.name}")
+                self._pending_panel.refresh()
+            else:
+                _write_xml(self._current_synth.file_path, text, enc)
+                self._status.setText(f"✅  Gespeichert: {self._current_synth.name}")
 
         except Exception as e:
             QMessageBox.warning(self, "Fehler", f"Speichern fehlgeschlagen: {e}")
@@ -582,12 +608,22 @@ class SynthEditorModule(QWidget):
         if new_path.exists():
             QMessageBox.warning(self, "Fehler", "Datei existiert bereits.")
             return
-        try:
-            synth.file_path.rename(new_path)
-            self._status.setText(f"✅  Umbenannt → {new_name}")
-            self.request_rescan.emit()
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.RENAME,
+                file_path=synth.file_path,
+                source_module="synth_editor",
+                new_name=f"{new_name.strip()}.XML",
+            ))
+            self._status.setText(f"⏳  Umbenennen vorgemerkt: {synth.name} → {new_name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                synth.file_path.rename(new_path)
+                self._status.setText(f"✅  Umbenannt → {new_name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _duplicate_selected(self):
         synth = self._selected_synth()
@@ -611,15 +647,28 @@ class SynthEditorModule(QWidget):
         synth = self._selected_synth()
         if not synth:
             return
-        reply = QMessageBox.question(self, "Löschen", f"'{synth.name}' löschen?", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(
+            self, "Löschen",
+            f"'{synth.name}' löschen?\n(Erst gespeichert wenn du 'Speichern' drückst)",
+            QMessageBox.Yes | QMessageBox.No
+        )
         if reply != QMessageBox.Yes:
             return
-        try:
-            synth.file_path.unlink()
-            self._status.setText(f"🗑  Gelöscht: {synth.name}")
-            self.request_rescan.emit()
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.DELETE,
+                file_path=synth.file_path,
+                source_module="synth_editor",
+            ))
+            self._status.setText(f"⏳  Zum Löschen vorgemerkt: {synth.name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                synth.file_path.unlink()
+                self._status.setText(f"🗑  Gelöscht: {synth.name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _export_selected(self):
         synth = self._selected_synth()
