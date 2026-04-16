@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
     QAbstractItemView, QFileDialog, QInputDialog, QMessageBox,
     QProgressBar, QSplitter, QTreeWidget, QTreeWidgetItem,
-    QLineEdit, QTextEdit
+    QLineEdit, QTextEdit, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
@@ -130,6 +130,13 @@ class BackupSyncModule(QWidget):
         self._notes_edit.setPlaceholderText("Optional…")
         notes_row.addWidget(self._notes_edit)
         create_layout.addLayout(notes_row)
+
+        self._exclude_samples_cb = QCheckBox("Ohne Samples-Ordner (schneller, kleiner)")
+        self._exclude_samples_cb.setToolTip(
+            "Sichert nur SONGS, KITS, SYNTHS.\n"
+            "Samples sind meist 90% des Speicherplatzes."
+        )
+        create_layout.addWidget(self._exclude_samples_cb)
 
         self._create_btn = QPushButton("💾  Backup jetzt erstellen")
         self._create_btn.setObjectName("SuccessButton")
@@ -261,7 +268,10 @@ class BackupSyncModule(QWidget):
         self._create_btn.setEnabled(False)
         self._progress.setVisible(True)
 
-        self._worker = BackupWorker(self._sd_root, self._backup_dir, label, notes)
+        self._worker = BackupWorker(
+            self._sd_root, self._backup_dir, label, notes,
+            exclude_samples=self._exclude_samples_cb.isChecked()
+        )
         self._worker.progress.connect(lambda p, m: (
             self._progress.setValue(p),
             self._status.setText(m)
@@ -360,6 +370,13 @@ class BackupSyncModule(QWidget):
             return
         item = self._history_table.item(rows[0].row(), 0)
         entry: BackupEntry = item.data(Qt.UserRole)
+
+        if entry.exclude_samples:
+            QMessageBox.information(
+                self, "Hinweis",
+                "Dieses Backup enthält keinen Samples-Ordner.\n"
+                "Nur SONGS, KITS und SYNTHS werden wiederhergestellt."
+            )
 
         if not self._sd_root:
             dest = QFileDialog.getExistingDirectory(self, "Wiederherstellungs-Ziel wählen", "")

@@ -28,6 +28,7 @@ class BackupEntry:
     size_bytes: int = 0
     file_count: int = 0
     notes: str = ""
+    exclude_samples: bool = False
 
     @property
     def size_mb(self) -> float:
@@ -55,6 +56,7 @@ def load_backup_history(backup_dir: Path) -> list[BackupEntry]:
                 size_bytes=zf.stat().st_size,
                 file_count=meta.get("file_count", 0),
                 notes=meta.get("notes", ""),
+                exclude_samples=meta.get("exclude_samples", False),
             ))
         else:
             # ZIP without meta — still include
@@ -132,12 +134,14 @@ class BackupWorker(QThread):
     finished = Signal(Path)
     error = Signal(str)
 
-    def __init__(self, sd_root: Path, backup_dir: Path, label: str, notes: str = ""):
+    def __init__(self, sd_root: Path, backup_dir: Path, label: str,
+                 notes: str = "", exclude_samples: bool = False):
         super().__init__()
         self.sd_root = sd_root
         self.backup_dir = backup_dir
         self.label = label
         self.notes = notes
+        self.exclude_samples = exclude_samples
         self._cancelled = False
 
     def cancel(self):
@@ -161,8 +165,16 @@ class BackupWorker(QThread):
         # Collect all files to backup
         all_files = []
         for f in self.sd_root.rglob("*"):
-            if f.is_file() and f.name not in IGNORE_PATTERNS:
-                all_files.append(f)
+            if not f.is_file() or f.name in IGNORE_PATTERNS:
+                continue
+            if self.exclude_samples:
+                try:
+                    rel = f.relative_to(self.sd_root)
+                    if rel.parts[0].upper() == "SAMPLES":
+                        continue
+                except ValueError:
+                    pass
+            all_files.append(f)
 
         total = len(all_files)
         self.progress.emit(0, f"Starte Backup ({total} Dateien)…")
@@ -190,6 +202,7 @@ class BackupWorker(QThread):
                 "sd_root": str(self.sd_root),
                 "file_count": file_count,
                 "notes": self.notes,
+                "exclude_samples": self.exclude_samples,
                 "version": "1.0",
             }
             zf.writestr(BACKUP_META_FILE, json.dumps(meta, indent=2))
