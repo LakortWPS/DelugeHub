@@ -99,16 +99,14 @@ class BackupSyncModule(QWidget):
         root.addWidget(config)
         root.addSpacing(12)
 
-        # Main splitter
+        # Main splitter (horizontal: left panel | right panel)
         splitter = QSplitter(Qt.Horizontal)
 
-        # Left: create backup + history
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 8, 0)
-        left_layout.setSpacing(12)
+        # Left panel: vertical splitter (create card | history)
+        left_vsplit = QSplitter(Qt.Vertical)
+        left_vsplit.setContentsMargins(0, 0, 8, 0)
 
-        # Create backup card
+        # ── Create backup card ─────────────────────────────────────────────
         create_card = QFrame()
         create_card.setObjectName("Card")
         create_layout = QVBoxLayout(create_card)
@@ -144,10 +142,21 @@ class BackupSyncModule(QWidget):
         self._create_btn.clicked.connect(self._create_backup)
         create_layout.addWidget(self._create_btn)
 
-        left_layout.addWidget(create_card)
+        left_vsplit.addWidget(create_card)
 
-        # Backup history table
-        left_layout.addWidget(self._lbl("BACKUP-VERLAUF", "SectionTitle"))
+        # ── Backup history ─────────────────────────────────────────────────
+        history_widget = QWidget()
+        history_layout = QVBoxLayout(history_widget)
+        history_layout.setContentsMargins(0, 4, 0, 0)
+        history_layout.setSpacing(8)
+
+        history_layout.addWidget(self._lbl("BACKUP-VERLAUF", "SectionTitle"))
+
+        refresh_btn = QPushButton("🔄  Verlauf laden")
+        refresh_btn.setObjectName("SecondaryButton")
+        refresh_btn.setMinimumHeight(32)
+        refresh_btn.clicked.connect(self._load_history)
+        history_layout.addWidget(refresh_btn)
 
         self._history_table = QTableWidget(0, 4)
         self._history_table.setHorizontalHeaderLabels(["Datum", "Bezeichnung", "Größe", "Dateien"])
@@ -164,14 +173,7 @@ class BackupSyncModule(QWidget):
         self._history_table.setColumnWidth(2, 75)
         self._history_table.setColumnWidth(3, 75)
         self._history_table.itemSelectionChanged.connect(self._on_backup_selected)
-
-        refresh_btn = QPushButton("🔄  Verlauf laden")
-        refresh_btn.setObjectName("SecondaryButton")
-        refresh_btn.setMinimumHeight(32)
-        refresh_btn.clicked.connect(self._load_history)
-
-        left_layout.addWidget(refresh_btn)
-        left_layout.addWidget(self._history_table, 1)
+        history_layout.addWidget(self._history_table, 1)
 
         # History actions
         hist_btn_row = QHBoxLayout()
@@ -192,9 +194,13 @@ class BackupSyncModule(QWidget):
         hist_btn_row.addWidget(self._restore_btn)
         hist_btn_row.addWidget(self._delete_backup_btn)
         hist_btn_row.addStretch()
-        left_layout.addLayout(hist_btn_row)
+        history_layout.addLayout(hist_btn_row)
 
-        splitter.addWidget(left)
+        left_vsplit.addWidget(history_widget)
+        left_vsplit.setStretchFactor(0, 0)   # create card: feste Größe
+        left_vsplit.setStretchFactor(1, 1)   # history: wächst mit
+
+        splitter.addWidget(left_vsplit)
 
         # Right: backup contents
         right = QWidget()
