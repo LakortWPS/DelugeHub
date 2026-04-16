@@ -89,10 +89,6 @@ class KitManagerModule(QWidget):
         hdr.addLayout(col)
         hdr.addStretch()
 
-        self._import_btn = QPushButton("⬇  Kit importieren")
-        self._import_btn.clicked.connect(self._import_kit)
-        self._import_btn.setFixedHeight(36)
-        hdr.addWidget(self._import_btn)
         root.addLayout(hdr)
         root.addSpacing(14)
 
@@ -101,23 +97,24 @@ class KitManagerModule(QWidget):
         tb.setObjectName("Card")
         tb_layout = QHBoxLayout(tb)
         tb_layout.setContentsMargins(12, 8, 12, 8)
-        tb_layout.setSpacing(8)
+        tb_layout.setSpacing(6)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Kits suchen…")
         self._search.textChanged.connect(self._filter)
 
-        self._rename_btn = QPushButton("✏  Umbenennen")
+        self._rename_btn = QPushButton("✏ Umbenennen")
         self._rename_btn.setObjectName("SecondaryButton")
         self._rename_btn.clicked.connect(self._rename_selected)
         self._rename_btn.setEnabled(False)
 
-        self._dupe_btn = QPushButton("📋  Duplizieren")
+        self._dupe_btn = QPushButton("📋 Duplizieren")
         self._dupe_btn.setObjectName("SecondaryButton")
         self._dupe_btn.clicked.connect(self._duplicate_selected)
         self._dupe_btn.setEnabled(False)
 
-        self._norm_btn = QPushButton("🔊  Volumes normalisieren")
+        self._norm_btn = QPushButton("🔊 Normalisieren")
+        self._norm_btn.setObjectName("SecondaryButton")
         self._norm_btn.setToolTip(
             "WAV-Dateien analysieren (RMS) und Pad-Volumes angleichen,\n"
             "sodass alle Pads gleich laut klingen."
@@ -125,7 +122,7 @@ class KitManagerModule(QWidget):
         self._norm_btn.clicked.connect(self._normalize_volumes)
         self._norm_btn.setEnabled(False)
 
-        self._cap_master_btn = QPushButton("⬇  Master-Vol.")
+        self._cap_master_btn = QPushButton("⬇ Master")
         self._cap_master_btn.setObjectName("SecondaryButton")
         self._cap_master_btn.setToolTip(
             "Kit-Master-Volume auf eine Maximallautstärke begrenzen.\n"
@@ -134,7 +131,7 @@ class KitManagerModule(QWidget):
         self._cap_master_btn.clicked.connect(self._cap_kit_master)
         self._cap_master_btn.setEnabled(False)
 
-        self._cap_pads_btn = QPushButton("⬇  Pad-Vols.")
+        self._cap_pads_btn = QPushButton("⬇ Pads")
         self._cap_pads_btn.setObjectName("SecondaryButton")
         self._cap_pads_btn.setToolTip(
             "Alle Pad-Volumes auf eine Maximallautstärke begrenzen.\n"
@@ -143,8 +140,15 @@ class KitManagerModule(QWidget):
         self._cap_pads_btn.clicked.connect(self._cap_pad_volumes)
         self._cap_pads_btn.setEnabled(False)
 
-        self._delete_btn = QPushButton("🗑  Löschen")
+        self._import_btn = QPushButton("⬇ Importieren")
+        self._import_btn.setObjectName("SecondaryButton")
+        self._import_btn.setToolTip("Kit-XML aus Dateisystem importieren")
+        self._import_btn.clicked.connect(self._import_kit)
+
+        self._delete_btn = QPushButton("🗑")
         self._delete_btn.setObjectName("DangerButton")
+        self._delete_btn.setToolTip("Ausgewähltes Kit löschen")
+        self._delete_btn.setFixedWidth(34)
         self._delete_btn.clicked.connect(self._delete_selected)
         self._delete_btn.setEnabled(False)
 
@@ -155,6 +159,7 @@ class KitManagerModule(QWidget):
         tb_layout.addWidget(self._norm_btn)
         tb_layout.addWidget(self._cap_master_btn)
         tb_layout.addWidget(self._cap_pads_btn)
+        tb_layout.addWidget(self._import_btn)
         tb_layout.addWidget(self._delete_btn)
         root.addWidget(tb)
         root.addSpacing(8)
@@ -176,7 +181,6 @@ class KitManagerModule(QWidget):
         self._table.setColumnWidth(1, 55)
         self._table.setColumnWidth(2, 80)
         self._table.setMinimumWidth(240)
-        self._table.setMaximumWidth(320)
         self._table.itemSelectionChanged.connect(self._on_kit_selected)
         splitter.addWidget(self._table)
 
@@ -686,6 +690,7 @@ class KitManagerModule(QWidget):
 
     def _import_kit(self):
         if not self._index:
+            QMessageBox.warning(self, "Kein SD-Ordner", "Bitte zuerst einen SD-Card-Ordner laden.")
             return
         path, _ = QFileDialog.getOpenFileName(self, "Kit importieren", "", "XML Files (*.xml *.XML)")
         if not path:

@@ -61,28 +61,29 @@ class SongManagerModule(QWidget):
         tb.setObjectName("Card")
         tb_layout = QHBoxLayout(tb)
         tb_layout.setContentsMargins(12, 8, 12, 8)
-        tb_layout.setSpacing(8)
+        tb_layout.setSpacing(6)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Songs suchen…")
         self._search.textChanged.connect(self._filter)
 
-        self._export_btn = QPushButton("📦  Exportieren")
+        self._export_btn = QPushButton("📦 Exportieren")
+        self._export_btn.setObjectName("SecondaryButton")
         self._export_btn.setToolTip("Song + alle Dependencies (Samples, Kits, Synths) als Paket exportieren")
         self._export_btn.clicked.connect(self._export_selected)
         self._export_btn.setEnabled(False)
 
-        self._rename_btn = QPushButton("✏  Umbenennen")
+        self._rename_btn = QPushButton("✏ Umbenennen")
         self._rename_btn.setObjectName("SecondaryButton")
         self._rename_btn.clicked.connect(self._rename_selected)
         self._rename_btn.setEnabled(False)
 
-        self._dupe_btn = QPushButton("📋  Duplizieren")
+        self._dupe_btn = QPushButton("📋 Duplizieren")
         self._dupe_btn.setObjectName("SecondaryButton")
         self._dupe_btn.clicked.connect(self._duplicate_selected)
         self._dupe_btn.setEnabled(False)
 
-        self._cap_master_btn = QPushButton("⬇  Song-Master")
+        self._cap_master_btn = QPushButton("⬇ Master")
         self._cap_master_btn.setObjectName("SecondaryButton")
         self._cap_master_btn.setToolTip(
             "Song-Master-Volume (songParams) auf eine Maximallautstärke begrenzen.\n"
@@ -91,7 +92,7 @@ class SongManagerModule(QWidget):
         self._cap_master_btn.clicked.connect(self._cap_song_master)
         self._cap_master_btn.setEnabled(False)
 
-        self._cap_clips_btn = QPushButton("⬇  Clip-Vols.")
+        self._cap_clips_btn = QPushButton("⬇ Clips")
         self._cap_clips_btn.setObjectName("SecondaryButton")
         self._cap_clips_btn.setToolTip(
             "Alle Clip-Volumes (kitParams/synthParams) auf eine Maximallautstärke begrenzen.\n"
@@ -100,8 +101,10 @@ class SongManagerModule(QWidget):
         self._cap_clips_btn.clicked.connect(self._cap_clip_volumes)
         self._cap_clips_btn.setEnabled(False)
 
-        self._delete_btn = QPushButton("🗑  Löschen")
+        self._delete_btn = QPushButton("🗑")
         self._delete_btn.setObjectName("DangerButton")
+        self._delete_btn.setToolTip("Ausgewählten Song löschen")
+        self._delete_btn.setFixedWidth(34)
         self._delete_btn.clicked.connect(self._delete_selected)
         self._delete_btn.setEnabled(False)
 
@@ -142,7 +145,6 @@ class SongManagerModule(QWidget):
         detail = QFrame()
         detail.setObjectName("Card")
         detail.setMinimumWidth(220)
-        detail.setMaximumWidth(280)
         d_layout = QVBoxLayout(detail)
         d_layout.setContentsMargins(14, 14, 14, 14)
         d_layout.setSpacing(8)
@@ -167,7 +169,7 @@ class SongManagerModule(QWidget):
 
         d_layout.addStretch()
 
-        if_missing_btn = QPushButton("🔍  Fehlende reparieren")
+        if_missing_btn = QPushButton("🔍 Fehlende reparieren")
         if_missing_btn.setObjectName("DangerButton")
         if_missing_btn.clicked.connect(lambda: self.navigate_to.emit("lost_sample_finder"))
         d_layout.addWidget(if_missing_btn)

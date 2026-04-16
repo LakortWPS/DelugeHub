@@ -101,10 +101,6 @@ class SynthEditorModule(QWidget):
         hdr.addLayout(col)
         hdr.addStretch()
 
-        self._import_btn = QPushButton("⬇  Importieren")
-        self._import_btn.clicked.connect(self._import_synth)
-        self._import_btn.setFixedHeight(36)
-        hdr.addWidget(self._import_btn)
         root.addLayout(hdr)
         root.addSpacing(14)
 
@@ -113,40 +109,47 @@ class SynthEditorModule(QWidget):
         tb.setObjectName("Card")
         tb_layout = QHBoxLayout(tb)
         tb_layout.setContentsMargins(12, 8, 12, 8)
-        tb_layout.setSpacing(8)
+        tb_layout.setSpacing(6)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Synths suchen…")
         self._search.textChanged.connect(self._filter)
 
-        self._rand_btn = QPushButton("🎲  Randomizer")
+        self._rand_btn = QPushButton("🎲 Randomizer")
+        self._rand_btn.setObjectName("SecondaryButton")
         self._rand_btn.setToolTip("Zufälligen Synth generieren")
         self._rand_btn.clicked.connect(self._randomize)
         self._rand_btn.setEnabled(False)
 
-        self._save_btn = QPushButton("💾  Speichern")
+        self._save_btn = QPushButton("💾 Speichern")
         self._save_btn.setObjectName("SuccessButton")
         self._save_btn.clicked.connect(self._save_params)
         self._save_btn.setEnabled(False)
 
-        self._rename_btn = QPushButton("✏  Umbenennen")
+        self._rename_btn = QPushButton("✏ Umbenennen")
         self._rename_btn.setObjectName("SecondaryButton")
         self._rename_btn.clicked.connect(self._rename_selected)
         self._rename_btn.setEnabled(False)
 
-        self._dupe_btn = QPushButton("📋  Duplizieren")
+        self._dupe_btn = QPushButton("📋 Duplizieren")
         self._dupe_btn.setObjectName("SecondaryButton")
         self._dupe_btn.clicked.connect(self._duplicate_selected)
         self._dupe_btn.setEnabled(False)
 
-        self._export_btn = QPushButton("📦  Exportieren")
+        self._export_btn = QPushButton("📦 Exportieren")
         self._export_btn.setObjectName("SecondaryButton")
         self._export_btn.clicked.connect(self._export_selected)
         self._export_btn.setEnabled(False)
 
+        self._import_btn = QPushButton("⬇ Importieren")
+        self._import_btn.setObjectName("SecondaryButton")
+        self._import_btn.setToolTip("Synth-XML aus Dateisystem importieren")
+        self._import_btn.clicked.connect(self._import_synth)
+
         self._delete_btn = QPushButton("🗑")
         self._delete_btn.setObjectName("DangerButton")
-        self._delete_btn.setFixedWidth(36)
+        self._delete_btn.setToolTip("Ausgewählten Synth löschen")
+        self._delete_btn.setFixedWidth(34)
         self._delete_btn.clicked.connect(self._delete_selected)
         self._delete_btn.setEnabled(False)
 
@@ -157,6 +160,7 @@ class SynthEditorModule(QWidget):
         tb_layout.addWidget(self._rename_btn)
         tb_layout.addWidget(self._dupe_btn)
         tb_layout.addWidget(self._export_btn)
+        tb_layout.addWidget(self._import_btn)
         tb_layout.addWidget(self._delete_btn)
         root.addWidget(tb)
         root.addSpacing(8)
@@ -178,7 +182,6 @@ class SynthEditorModule(QWidget):
         self._table.setColumnWidth(1, 75)
         self._table.setColumnWidth(2, 70)
         self._table.setMinimumWidth(220)
-        self._table.setMaximumWidth(300)
         self._table.itemSelectionChanged.connect(self._on_synth_selected)
         splitter.addWidget(self._table)
 
@@ -687,6 +690,7 @@ class SynthEditorModule(QWidget):
 
     def _import_synth(self):
         if not self._index:
+            QMessageBox.warning(self, "Kein SD-Ordner", "Bitte zuerst einen SD-Card-Ordner laden.")
             return
         path, _ = QFileDialog.getOpenFileName(self, "Synth importieren", "", "XML Files (*.xml *.XML)")
         if not path:
