@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Kit
+from ..core.staging import StagingStore, PendingChange, ChangeType
 
 
 class PadWidget(QFrame):
@@ -72,6 +73,7 @@ class KitManagerModule(QWidget):
         self._current_kit: Optional[Kit] = None
         self._pads: list[PadWidget] = []
         self._history = None
+        self._staging: Optional[StagingStore] = None
         self._build_ui()
 
     def _build_ui(self):
@@ -243,6 +245,13 @@ class KitManagerModule(QWidget):
         root.addSpacing(6)
         root.addWidget(self._status)
 
+        from ..widgets.pending_panel import PendingPanel
+        self._pending_panel = PendingPanel(
+            "kit_manager", StagingStore(),
+            rescan_fn=self.request_rescan.emit
+        )
+        root.addWidget(self._pending_panel)
+
         self._selected_pad: Optional[int] = None
 
     def _lbl(self, text, obj=""):
@@ -253,6 +262,12 @@ class KitManagerModule(QWidget):
 
     def set_history(self, history):
         self._history = history
+
+    def set_staging(self, staging: StagingStore):
+        self._staging = staging
+        if hasattr(self, '_pending_panel'):
+            self._pending_panel._staging = staging
+            self._pending_panel.refresh()
 
     def update_index(self, index: SDCardIndex):
         self._index = index
@@ -381,20 +396,22 @@ class KitManagerModule(QWidget):
         if new_path.exists():
             QMessageBox.warning(self, "Fehler", "Datei existiert bereits.")
             return
-        try:
-            kit.file_path.rename(new_path)
-            self._status.setText(f"✅  Umbenannt → {new_name}")
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _old, _new = kit.file_path, new_path
-                self._history.push(Action(
-                    description=f"Kit umbenannt: {kit.name} → {new_name}",
-                    undo_fn=lambda o=_old, n=_new: n.rename(o),
-                    redo_fn=lambda o=_old, n=_new: o.rename(n),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.RENAME,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+                new_name=f"{new_name.strip()}.XML",
+            ))
+            self._status.setText(f"⏳  Umbenennen vorgemerkt: {kit.name} → {new_name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                kit.file_path.rename(new_path)
+                self._status.setText(f"✅  Umbenannt → {new_name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _duplicate_selected(self):
         kit = self._selected_kit()
@@ -427,15 +444,28 @@ class KitManagerModule(QWidget):
         kit = self._selected_kit()
         if not kit:
             return
-        reply = QMessageBox.question(self, "Löschen", f"'{kit.name}' löschen?", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(
+            self, "Löschen",
+            f"'{kit.name}' löschen?\n(Erst gespeichert wenn du 'Speichern' drückst)",
+            QMessageBox.Yes | QMessageBox.No
+        )
         if reply != QMessageBox.Yes:
             return
-        try:
-            kit.file_path.unlink()
-            self._status.setText(f"🗑  Gelöscht: {kit.name}")
-            self.request_rescan.emit()
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.DELETE,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+            ))
+            self._status.setText(f"⏳  Zum Löschen vorgemerkt: {kit.name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                kit.file_path.unlink()
+                self._status.setText(f"🗑  Gelöscht: {kit.name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _normalize_volumes(self):
         """
@@ -632,24 +662,27 @@ class KitManagerModule(QWidget):
         start, end = sources_match.start(1), sources_match.end(1)
         new_text = text[:start] + sources_block + text[end:]
 
-        try:
-            _write_xml(kit.file_path, new_text, enc)
-            skipped = len(pads) - len(valid_pads)
-            skip_note = f" ({skipped} ohne Sample übersprungen)" if skipped else ""
-            self._status.setText(
-                f"✅  {changed} Pad-Volume(s) normalisiert (RMS-Analyse){skip_note}."
-            )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Volumes normalisiert: {kit.name}",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        skipped = len(pads) - len(valid_pads)
+        skip_note = f" ({skipped} ohne Sample übersprungen)" if skipped else ""
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: {changed} Pad-Volume(s) normalisiert{skip_note}.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(kit.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  {changed} Pad-Volume(s) normalisiert (RMS-Analyse){skip_note}."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _import_kit(self):
         if not self._index:
@@ -757,22 +790,25 @@ class KitManagerModule(QWidget):
             return
 
         new_text = new_pre + post_block
-        try:
-            _write_xml(kit.file_path, new_text, enc)
-            self._status.setText(
-                f"✅  Kit-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
-            )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Kit-Master begrenzt: {kit.name} → {threshold}/50",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: Kit-Master {current_display:.1f}/50 → {threshold}/50.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(kit.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  Kit-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _cap_pad_volumes(self):
         """
@@ -854,19 +890,22 @@ class KitManagerModule(QWidget):
 
         start, end = sources_match.start(1), sources_match.end(1)
         new_text = text[:start] + sources_block + text[end:]
-        try:
-            _write_xml(kit.file_path, new_text, enc)
-            self._status.setText(
-                f"✅  {changed} Pad-Volume(s) auf max. {threshold}/50 begrenzt."
-            )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Pad-Vols. begrenzt: {kit.name} → {threshold}/50",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: {changed} Pad-Volume(s) auf max. {threshold}/50.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(kit.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  {changed} Pad-Volume(s) auf max. {threshold}/50 begrenzt."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
