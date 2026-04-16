@@ -1,62 +1,62 @@
-# DelugeHub — Installer erstellen
+# DelugeHub — Building the Windows Installer
 
-## Voraussetzungen
+## Prerequisites
 
-1. **Python 3.11+** mit allen Abhängigkeiten installiert:
+1. **Python 3.11+** with all dependencies installed:
    ```bash
    pip install -r requirements.txt
    pip install pyinstaller
    ```
 
-2. **Inno Setup 6** (kostenlos):  
+2. **Inno Setup 6** (free):  
    https://jrsoftware.org/isinfo.php
 
 ---
 
-## Installer bauen
+## Build
 
 ```bat
 installer\build_installer.bat
 ```
 
-Das Skript führt automatisch zwei Schritte aus:
+The script runs two steps automatically:
 
-**Schritt 1 — PyInstaller** bündelt die App zu einem eigenständigen Windows-Programm (kein Python nötig beim Endnutzer). Output: `dist\DelugeHub\`
+**Step 1 — PyInstaller** bundles the app into a standalone Windows executable (no Python required on the end user's machine). Output: `dist\DelugeHub\`
 
-**Schritt 2 — Inno Setup** verpackt den Build in einen klassischen Windows Setup-Wizard. Output: `installer\output\DelugeHub-2.0.1-Setup.exe`
+**Step 2 — Inno Setup** packages the build into a classic Windows setup wizard. Output: `installer\output\DelugeHub-2.0.1-Setup.exe`
 
 ---
 
-## Manuell ausführen
+## Running steps manually
 
 ```bat
-:: Nur PyInstaller
+:: PyInstaller only
 pyinstaller installer\DelugeHub.spec --clean --noconfirm
 
-:: Nur Inno Setup (nach PyInstaller)
+:: Inno Setup only (after PyInstaller)
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
 ```
 
 ---
 
-## Icon hinzufügen (optional)
+## Adding an icon (optional)
 
-1. `icon.ico` in diesen Ordner legen
-2. In `DelugeHub.spec` die auskommentierte Zeile aktivieren:
+1. Place `icon.ico` in this folder
+2. Uncomment the line in `DelugeHub.spec`:
    ```python
    icon='installer/icon.ico',
    ```
-3. In `setup.iss` die auskommentierte Zeile aktivieren:
+3. Uncomment the line in `setup.iss`:
    ```ini
    SetupIconFile=icon.ico
    ```
 
 ---
 
-## Hinweise
+## Notes
 
-- Der Installer erfordert **Windows 10 64-bit** oder neuer
-- Installiert nach `C:\Program Files\DelugeHub\` (änderbar im Wizard)
-- Erstellt optional Desktop-Verknüpfung
-- Enthält vollständigen Uninstaller
-- `sounddevice` / `numpy` sind im Build **nicht** enthalten (optionale Audio-Vorschau) — bei Bedarf in `DelugeHub.spec` unter `excludes` entfernen
+- Requires **Windows 10 64-bit** or later
+- Installs to `C:\Program Files\DelugeHub\` (configurable during setup)
+- Optionally creates a desktop shortcut
+- Includes a full uninstaller
+- `sounddevice` / `numpy` are **not** included in the build (optional audio preview) — remove them from `excludes` in `DelugeHub.spec` if needed

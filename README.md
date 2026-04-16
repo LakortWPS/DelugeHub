@@ -6,16 +6,16 @@
 
 ## Features
 
-| Modul | Beschreibung |
+| Module | Description |
 |---|---|
-| 🎵 **Song Manager** | Songs verwalten, umbenennen, duplizieren, exportieren mit allen Dependencies |
-| 🥁 **Kit Manager** | Kits & Pad-Zuweisungen bearbeiten, Volumes normalisieren & begrenzen |
-| 🎹 **Synth Editor** | Parameter bearbeiten, Randomizer, Import/Export |
-| 📁 **Sample Manager** | Ordner-Tree, Vorschau, Move/Rename mit auto XML-Update |
-| 🔍 **Lost Sample Finder** | Fehlende Samples finden, Auto-Match, Batch-Fix |
-| ⚡ **Batch Hub** | Massenoperationen: Rename, Export, Delete, Normalize für alle Inhaltstypen |
-| 💾 **Backup & Sync** | ZIP-Backups erstellen, Verlauf verwalten, selektiv wiederherstellen |
-| ⚙️ **Einstellungen** | SD-Pfad, Theme (Dark/Light), Auto-Scan |
+| 🎵 **Song Manager** | Browse, rename, duplicate and export songs with all dependencies |
+| 🥁 **Kit Manager** | Edit kits & pad assignments, normalize and cap volumes |
+| 🎹 **Synth Editor** | Edit parameters, randomizer, import/export |
+| 📁 **Sample Manager** | Folder tree, preview, move/rename with automatic XML path update |
+| 🔍 **Lost Sample Finder** | Find missing samples, auto-match, batch fix |
+| ⚡ **Batch Hub** | Bulk rename, export, delete, normalize across all content types |
+| 💾 **Backup & Sync** | Create ZIP backups, manage history, selectively restore |
+| ⚙️ **Settings** | SD path, theme (dark/light), auto-scan |
 
 ---
 
@@ -26,33 +26,38 @@ pip install -r requirements.txt
 python main.py
 ```
 
-**Optionale Audio-Vorschau** (Sample Manager):
+**Optional audio preview** (Sample Manager):
 ```bash
 pip install sounddevice numpy
 ```
 
 ---
 
-## Projektstruktur
+## Project Structure
 
 ```
 DelugeHub/
 ├── main.py                      ← Entry point
 ├── requirements.txt
 ├── CHANGELOG.md
+├── installer/                   ← Windows installer build system
+│   ├── DelugeHub.spec           ← PyInstaller config
+│   ├── setup.iss                ← Inno Setup script
+│   ├── build_installer.bat      ← One-click build script
+│   └── README.md                ← Build instructions
 ├── app/
-│   ├── main_window.py           ← Hauptfenster, StagingStore, Status-Bar
-│   ├── theme.py                 ← Dark + Light QSS
+│   ├── main_window.py           ← Main window, StagingStore, status bar
+│   ├── theme.py                 ← Dark + Light QSS stylesheets
 │   ├── core/
-│   │   ├── models.py            ← Datenmodelle (Song, Kit, Synth, …)
-│   │   ├── xml_parser.py        ← Deluge XML Parser (Firmware 1.x + 2.x)
-│   │   ├── sd_scanner.py        ← Async SD-Card Scanner
-│   │   ├── file_ops.py          ← Datei-Operationen + XML-Pfad-Update
+│   │   ├── models.py            ← Data models (Song, Kit, Synth, …)
+│   │   ├── xml_parser.py        ← Deluge XML parser (firmware 1.x + 2.x)
+│   │   ├── sd_scanner.py        ← Async SD-card scanner
+│   │   ├── file_ops.py          ← File operations + XML path update
 │   │   ├── staging.py           ← StagingStore, PendingChange, ChangeType
-│   │   ├── lost_finder.py       ← Lost Sample Logik
-│   │   └── backup.py            ← Backup/Restore, ZIP-Verwaltung
+│   │   ├── lost_finder.py       ← Lost sample logic
+│   │   └── backup.py            ← Backup/restore, ZIP management
 │   ├── widgets/
-│   │   └── pending_panel.py     ← PendingPanel Widget (Staging-Anzeige)
+│   │   └── pending_panel.py     ← PendingPanel widget (staging display)
 │   └── modules/
 │       ├── song_manager.py
 │       ├── kit_manager.py
@@ -66,64 +71,72 @@ DelugeHub/
 
 ---
 
-## Changelog
+## Building a Windows Installer
 
-### v2.0.1 — 2026-04-16 · UI-Fixes & Verbesserungen
+See [installer/README.md](installer/README.md) for full instructions.
 
-- **Fix:** Import-Buttons (Kit & Synth) zeigen jetzt eine Fehlermeldung wenn kein SD-Ordner geladen ist — kein stilles Nichts mehr
-- **Fix:** Button-Texte in Dialogen wurden abgeschnitten — `QMessageBox` durch `QDialog` ersetzt, Buttons passen sich jetzt an den Text an
-- **Fix:** Backup-Seite neu strukturiert: Backup-Ordner-Feld kompakt in den Header verschoben; Create- und History-Bereich in vertikalen Splitter aufgeteilt — alles auf einmal sichtbar, History-Tabelle scrollbar
-- **Fix:** Toolbar-Button-Labels in allen Modulen gekürzt (vollständige Beschreibung per Tooltip), kein Text-Abschneiden mehr bei schmalem Fenster
-- **Fix:** `setMaximumWidth` auf Tabellen und Panels entfernt — Inhalte können jetzt frei mit dem Fenster wachsen
-- **Entfernt:** Theme-Toggle-Button aus dem Header — Theme wird ausschließlich über Einstellungen geändert
+**Requirements:** PyInstaller + [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+
+```bat
+installer\build_installer.bat
+```
+
+Output: `installer\output\DelugeHub-2.0.1-Setup.exe`
 
 ---
+
+## Changelog
+
+### v2.0.1 — 2026-04-16 · UI Fixes & Improvements
+
+- **Fix:** Import buttons (Kit & Synth) now show an error message when no SD folder is loaded instead of silently doing nothing
+- **Fix:** Button text was being clipped in dialogs — replaced `QMessageBox` with `QDialog` so buttons now scale to their text
+- **Fix:** Backup page restructured: folder field moved inline into the header; create and history sections split into a vertical splitter — everything visible at once, history table scrollable
+- **Fix:** Toolbar button labels shortened across all modules (full description via tooltip), no more text clipping on narrow windows
+- **Fix:** Removed `setMaximumWidth` from tables and panels — content can now grow freely with the window
+- **Removed:** Theme toggle button from the header — theme is now changed exclusively via Settings
 
 ### v2.0.0 — 2026-04-16 · Staging System
 
-Alle schreibenden Operationen werden jetzt gepuffert und erst auf expliziten Befehl auf die SD-Card geschrieben. Kein versehentliches Überschreiben mehr.
+All write operations are now buffered and only committed to the SD card on explicit user command. No more accidental overwrites.
 
-- **Neu: StagingStore** — In-Memory-Buffer für alle ausstehenden Änderungen; wird als `.delugyhub_pending.json` auf der SD-Card gespeichert und beim nächsten Start wiederhergestellt
-- **Neu: PendingPanel** — Jedes Modul zeigt ausstehende Änderungen an; Speichern wahlweise in Originalpfad oder Export-Ordner, Verwerfen mit einem Klick
-- **Neu: Status-Bar-Badge** im Hauptfenster — zeigt Gesamtanzahl ausstehender Änderungen über alle Module
-- **Neu: Backup ohne Samples** — Option "Ohne Samples-Ordner" beim Backup erstellen (schneller, deutlich kleiner)
-- **Geändert:** Song Manager, Kit Manager, Synth Editor, Batch Hub — alle schreibenden Operationen nutzen jetzt StagingStore (Fallback auf Direktschreiben wenn kein Store gesetzt)
+- **New: StagingStore** — in-memory buffer for all pending changes; persisted as `.delugyhub_pending.json` on the SD card and restored on next launch
+- **New: PendingPanel** — each module shows pending changes; save to original path or export folder, discard with one click
+- **New: Status bar badge** — shows total pending changes across all modules
+- **New: Backup without Samples** — checkbox to skip the SAMPLES folder when creating a backup (faster, much smaller)
+- **Changed:** Song Manager, Kit Manager, Synth Editor, Batch Hub — all write operations now use StagingStore (falls back to direct write if no store is set)
 
----
+### v1.1.0 · Volume Cap & Stability
 
-### v1.1.0 — Volume Cap & Stabilität
-
-- **Neu:** Volume Cap für Song-Master, Clip-Volumes, Kit-Master, Pad-Volumes
-- **Neu:** Batch Hub — Massenoperationen über alle Songs/Kits/Synths
-- **Neu:** Lost Sample Finder mit Auto-Match
-- **Neu:** Backup & Sync Modul
-- **Neu:** Settings-Modul mit Theme-Wahl
-- **Fix:** Diverse Layout- und Stabilitätsprobleme
-
----
+- **New:** Volume cap for song master, clip volumes, kit master, pad volumes
+- **New:** Batch Hub — bulk operations across all songs/kits/synths
+- **New:** Lost Sample Finder with auto-match
+- **New:** Backup & Sync module
+- **New:** Settings module with theme selection
+- **Fix:** Various layout and stability issues
 
 ### v1.0.4
-- Fix: Kaputte Deluge XML-Dateien mit fehlenden Closing-Tags werden via lxml automatisch repariert
-- Fix: Alle Tabellen-Spaltenheader vollständig sichtbar
+- Fix: Broken Deluge XML files with missing closing tags are now automatically repaired via lxml
+- Fix: All table column headers fully visible
 
 ### v1.0.3
-- Fix: XML-Parser erkennt Deluge Firmware 2.0.0-beta Format korrekt
-- Fix: Unescapte `&`-Zeichen in XML-Dateien werden automatisch korrigiert
+- Fix: XML parser now correctly handles Deluge firmware 2.0.0-beta format
+- Fix: Unescaped `&` characters in XML files are automatically corrected
 
 ### v1.0.2
-- Fix: App-Version wird dynamisch geladen
-- Fix: XML-Parser robust gegen ungültige Steuerzeichen und Null-Bytes
+- Fix: App version is now loaded dynamically
+- Fix: XML parser is robust against invalid control characters and null bytes
 
 ### v1.0.1
-- Fix: QLabel-Hintergründe transparent
-- Fix: Kein Fokus-Rahmen nach Button-Klick
+- Fix: QLabel backgrounds are transparent
+- Fix: No focus outline after button click
 
 ### v1.0.0
-- Erster Release
+- Initial release
 
 ---
 
-## Community & Lizenz
+## Community & License
 
 - [Deluge Community](https://delugecommunity.com)
 - MIT License
