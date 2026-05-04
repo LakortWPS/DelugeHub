@@ -1,0 +1,89 @@
+name: Bug Report
+description: Report a problem or unexpected behavior in DelugeHub
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill in as much detail as possible.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug.
+      placeholder: "Example: When I rename a song in the Song Manager, the app crashes with an error."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Step-by-step instructions to reproduce the bug.
+      placeholder: |
+        1. Open DelugeHub and load an SD card folder
+        2. Go to Song Manager
+        3. Right-click a song and select "Rename"
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: Affected module
+      description: Which part of DelugeHub is affected?
+      options:
+        - Song Manager
+        - Kit Manager
+        - Synth Editor
+        - Sample Manager
+        - Lost Sample Finder
+        - Batch Hub
+        - Backup & Sync
+        - Settings
+        - Other / General
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: DelugeHub version
+      placeholder: "e.g. 2.0.2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: deluge_fw
+    attributes:
+      label: Deluge firmware version (if relevant)
+      placeholder: "e.g. 1.3.0 or 2.0.0-beta"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error message or traceback (if any)
+      description: Paste any error messages or stack traces here.
+      render: shell
