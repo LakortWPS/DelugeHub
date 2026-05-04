@@ -12,6 +12,29 @@ DelugeHub is a desktop application for managing the SD card of the [Synthstrom D
 
 ---
 
+## Screenshots
+
+| Dashboard (Dark) | Dashboard (Light) |
+|---|---|
+| ![Dashboard Dark](docs/screenshots/screenshot-dashboard-dark.png) | ![Dashboard Light](docs/screenshots/screenshot-dashboard-light.png) |
+
+| Song Manager | Kit Manager |
+|---|---|
+| ![Song Manager](docs/screenshots/screenshot-song-manager.png) | ![Kit Manager](docs/screenshots/screenshot-kit-manager.png) |
+
+| Synth Editor | Sample Manager |
+|---|---|
+| ![Synth Editor](docs/screenshots/screenshot-synth-editor.png) | ![Sample Manager](docs/screenshots/screenshot-sample-manager.png) |
+
+| Lost Sample Finder | Batch Hub |
+|---|---|
+| ![Lost Sample Finder](docs/screenshots/screenshot-lost-sample-finder.png) | ![Batch Hub](docs/screenshots/screenshot-batch-hub.png) |
+
+| Backup & Sync | Settings |
+|---|---|
+| ![Backup & Sync](docs/screenshots/screenshot-backup-sync.png) | ![Settings](docs/screenshots/screenshot-settings-dark.png) |
+
+
 ## Features
 
 | Module | Description |
