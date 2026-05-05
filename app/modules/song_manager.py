@@ -18,6 +18,7 @@ from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Song
 from ..core.file_ops import update_xml_path
+from ..core.staging import StagingStore, PendingChange, ChangeType
 
 
 COL_NAME = 0
@@ -36,6 +37,7 @@ class SongManagerModule(QWidget):
         self._index: Optional[SDCardIndex] = None
         self._songs: list[Song] = []
         self._history = None
+        self._staging: Optional[StagingStore] = None
         self._build_ui()
 
     def _build_ui(self):
@@ -59,28 +61,29 @@ class SongManagerModule(QWidget):
         tb.setObjectName("Card")
         tb_layout = QHBoxLayout(tb)
         tb_layout.setContentsMargins(12, 8, 12, 8)
-        tb_layout.setSpacing(8)
+        tb_layout.setSpacing(6)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Songs suchen…")
         self._search.textChanged.connect(self._filter)
 
-        self._export_btn = QPushButton("📦  Exportieren")
+        self._export_btn = QPushButton("📦 Exportieren")
+        self._export_btn.setObjectName("SecondaryButton")
         self._export_btn.setToolTip("Song + alle Dependencies (Samples, Kits, Synths) als Paket exportieren")
         self._export_btn.clicked.connect(self._export_selected)
         self._export_btn.setEnabled(False)
 
-        self._rename_btn = QPushButton("✏  Umbenennen")
+        self._rename_btn = QPushButton("✏ Umbenennen")
         self._rename_btn.setObjectName("SecondaryButton")
         self._rename_btn.clicked.connect(self._rename_selected)
         self._rename_btn.setEnabled(False)
 
-        self._dupe_btn = QPushButton("📋  Duplizieren")
+        self._dupe_btn = QPushButton("📋 Duplizieren")
         self._dupe_btn.setObjectName("SecondaryButton")
         self._dupe_btn.clicked.connect(self._duplicate_selected)
         self._dupe_btn.setEnabled(False)
 
-        self._cap_master_btn = QPushButton("⬇  Song-Master")
+        self._cap_master_btn = QPushButton("⬇ Master")
         self._cap_master_btn.setObjectName("SecondaryButton")
         self._cap_master_btn.setToolTip(
             "Song-Master-Volume (songParams) auf eine Maximallautstärke begrenzen.\n"
@@ -89,7 +92,7 @@ class SongManagerModule(QWidget):
         self._cap_master_btn.clicked.connect(self._cap_song_master)
         self._cap_master_btn.setEnabled(False)
 
-        self._cap_clips_btn = QPushButton("⬇  Clip-Vols.")
+        self._cap_clips_btn = QPushButton("⬇ Clips")
         self._cap_clips_btn.setObjectName("SecondaryButton")
         self._cap_clips_btn.setToolTip(
             "Alle Clip-Volumes (kitParams/synthParams) auf eine Maximallautstärke begrenzen.\n"
@@ -98,8 +101,10 @@ class SongManagerModule(QWidget):
         self._cap_clips_btn.clicked.connect(self._cap_clip_volumes)
         self._cap_clips_btn.setEnabled(False)
 
-        self._delete_btn = QPushButton("🗑  Löschen")
+        self._delete_btn = QPushButton("🗑")
         self._delete_btn.setObjectName("DangerButton")
+        self._delete_btn.setToolTip("Ausgewählten Song löschen")
+        self._delete_btn.setFixedWidth(34)
         self._delete_btn.clicked.connect(self._delete_selected)
         self._delete_btn.setEnabled(False)
 
@@ -140,7 +145,6 @@ class SongManagerModule(QWidget):
         detail = QFrame()
         detail.setObjectName("Card")
         detail.setMinimumWidth(220)
-        detail.setMaximumWidth(280)
         d_layout = QVBoxLayout(detail)
         d_layout.setContentsMargins(14, 14, 14, 14)
         d_layout.setSpacing(8)
@@ -165,7 +169,7 @@ class SongManagerModule(QWidget):
 
         d_layout.addStretch()
 
-        if_missing_btn = QPushButton("🔍  Fehlende reparieren")
+        if_missing_btn = QPushButton("🔍 Fehlende reparieren")
         if_missing_btn.setObjectName("DangerButton")
         if_missing_btn.clicked.connect(lambda: self.navigate_to.emit("lost_sample_finder"))
         d_layout.addWidget(if_missing_btn)
@@ -180,6 +184,13 @@ class SongManagerModule(QWidget):
         root.addSpacing(6)
         root.addWidget(self._status)
 
+        from ..widgets.pending_panel import PendingPanel
+        self._pending_panel = PendingPanel(
+            "song_manager", StagingStore(),
+            rescan_fn=self.request_rescan.emit
+        )
+        root.addWidget(self._pending_panel)
+
     def _lbl(self, text, obj=""):
         l = QLabel(text)
         if obj:
@@ -188,6 +199,12 @@ class SongManagerModule(QWidget):
 
     def set_history(self, history):
         self._history = history
+
+    def set_staging(self, staging: StagingStore):
+        self._staging = staging
+        if hasattr(self, '_pending_panel'):
+            self._pending_panel._staging = staging
+            self._pending_panel.refresh()
 
     def update_index(self, index: SDCardIndex):
         self._index = index
@@ -294,20 +311,22 @@ class SongManagerModule(QWidget):
         if new_path.exists():
             QMessageBox.warning(self, "Fehler", "Datei mit diesem Namen existiert bereits.")
             return
-        try:
-            song.file_path.rename(new_path)
-            self._status.setText(f"✅  Song umbenannt → {new_name}")
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _old, _new = song.file_path, new_path
-                self._history.push(Action(
-                    description=f"Song umbenannt: {song.name} → {new_name.strip()}",
-                    undo_fn=lambda o=_old, n=_new: n.rename(o),
-                    redo_fn=lambda o=_old, n=_new: o.rename(n),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.RENAME,
+                file_path=song.file_path,
+                source_module="song_manager",
+                new_name=f"{new_name.strip()}.XML",
+            ))
+            self._status.setText(f"⏳  Umbenennen vorgemerkt: {song.name} → {new_name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                song.file_path.rename(new_path)
+                self._status.setText(f"✅  Song umbenannt → {new_name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _duplicate_selected(self):
         song = self._selected_song()
@@ -336,26 +355,26 @@ class SongManagerModule(QWidget):
             return
         reply = QMessageBox.question(
             self, "Song löschen",
-            f"'{song.name}' wirklich löschen?\n(Nur die Song-Datei, keine Samples)",
+            f"'{song.name}' wirklich löschen?\n(Erst gespeichert wenn du 'Speichern' drückst)",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             return
-        try:
-            from ..core.history import move_to_trash, restore_from_trash, Action
-            original_path = song.file_path
-            state = [move_to_trash(original_path)]
-            self._status.setText(f"🗑  Gelöscht: {song.name}")
-            self.request_rescan.emit()
-            if self._history:
-                _op = original_path
-                self._history.push(Action(
-                    description=f"Song gelöscht: {song.name}",
-                    undo_fn=lambda s=state, op=_op: restore_from_trash(s[0], op),
-                    redo_fn=lambda s=state, op=_op: s.__setitem__(0, move_to_trash(op)),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.DELETE,
+                file_path=song.file_path,
+                source_module="song_manager",
+            ))
+            self._status.setText(f"⏳  Zum Löschen vorgemerkt: {song.name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                song.file_path.unlink()
+                self._status.setText(f"🗑  Gelöscht: {song.name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _export_selected(self):
         song = self._selected_song()
@@ -405,11 +424,6 @@ class SongManagerModule(QWidget):
         return f"0x{v & 0xFFFFFFFF:08X}"
 
     def _cap_song_master(self):
-        """
-        Begrenzt den Song-Master-Volume (songParams/volume) auf einen
-        vom User eingegebenen Maximalwert (0–50).
-        Nur Werte ÜBER dem Limit werden angepasst — leisere bleiben unberührt.
-        """
         song = self._selected_song()
         if not song:
             return
@@ -457,7 +471,6 @@ class SongManagerModule(QWidget):
         new_hex = self._display_to_vol(threshold)
         text, enc = _read_xml(song.file_path)
 
-        # Nur im Bereich VOR <sessionClips> ersetzen — Clip-Volumes niemals berühren
         clips_pos = text.find('<sessionClips>')
         pre_block  = text[:clips_pos] if clips_pos >= 0 else text
         post_block = text[clips_pos:] if clips_pos >= 0 else ""
@@ -474,30 +487,29 @@ class SongManagerModule(QWidget):
             return
 
         new_text = new_pre + post_block
-        try:
-            _write_xml(song.file_path, new_text, enc)
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=song.file_path,
+                source_module="song_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
             self._status.setText(
-                f"✅  Song-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
+                f"⏳  Vorgemerkt: Song-Master {current_display:.1f}/50 → {threshold}/50."
             )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = song.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Song-Master begrenzt: {song.name} → {threshold}/50",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(song.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  Song-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _cap_clip_volumes(self):
-        """
-        Begrenzt alle Clip-Volumes (kitParams/volume und synthParams/volume) auf einen
-        vom User eingegebenen Maximalwert (0–50).
-        Nur Werte ÜBER dem Limit werden angepasst.
-        Interne Sound-Volumes (defaultParams) und songParams bleiben unberührt.
-        """
         import re
 
         song = self._selected_song()
@@ -525,8 +537,6 @@ class SongManagerModule(QWidget):
                 return m.group(1) + f'volume="{display_to_vol(threshold)}"'
             return m.group(0)
 
-        # Nur <kitParams> und <synthParams> volume-Attribute anpassen —
-        # niemals <defaultParams> (Pad/Sound-Volumes) oder <songParams> berühren
         new_text = re.sub(
             r'(<(?:kitParams|synthParams)\b[^>]*)volume="(0x[0-9A-Fa-f]+)"',
             cap_volume,
@@ -539,19 +549,22 @@ class SongManagerModule(QWidget):
             )
             return
 
-        try:
-            _write_xml(song.file_path, new_text, enc)
-            self._status.setText(
-                f"✅  Clip-Volumes auf max. {threshold}/50 begrenzt."
-            )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = song.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Clip-Vols. begrenzt: {song.name} → {threshold}/50",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=song.file_path,
+                source_module="song_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: Clip-Volumes auf max. {threshold}/50.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(song.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  Clip-Volumes auf max. {threshold}/50 begrenzt."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))

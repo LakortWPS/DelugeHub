@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
     QAbstractItemView, QFileDialog, QInputDialog, QMessageBox,
     QProgressBar, QSplitter, QTreeWidget, QTreeWidgetItem,
-    QLineEdit, QTextEdit
+    QLineEdit, QTextEdit, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
@@ -63,52 +63,45 @@ class BackupSyncModule(QWidget):
         root.setContentsMargins(28, 24, 28, 16)
         root.setSpacing(0)
 
+        # Header + Backup-Ordner inline
         hdr = QHBoxLayout()
+        hdr.setSpacing(16)
+
         col = QVBoxLayout()
-        col.setSpacing(4)
+        col.setSpacing(2)
         col.addWidget(self._lbl("💾  Backup & Sync", "PageTitle"))
         col.addWidget(self._lbl("SD-Card sichern, Verlauf verwalten, selektiv wiederherstellen", "PageSubtitle"))
         hdr.addLayout(col)
+
         hdr.addStretch()
-        root.addLayout(hdr)
-        root.addSpacing(14)
 
-        # Config card
-        config = QFrame()
-        config.setObjectName("Card")
-        config_layout = QVBoxLayout(config)
-        config_layout.setContentsMargins(16, 12, 16, 12)
-        config_layout.setSpacing(8)
-
-        config_layout.addWidget(self._lbl("KONFIGURATION", "SectionTitle"))
-
-        # Backup dir
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(QLabel("Backup-Ordner:"))
+        dir_lbl = QLabel("Backup-Ordner:")
+        dir_lbl.setStyleSheet("color: #888888; font-size: 12px;")
         self._backup_dir_edit = QLineEdit()
         self._backup_dir_edit.setPlaceholderText("Ziel-Ordner für Backups…")
+        self._backup_dir_edit.setFixedWidth(280)
+        self._backup_dir_edit.setFixedHeight(28)
         self._backup_dir_edit.textChanged.connect(self._on_backup_dir_changed)
         dir_browse = QPushButton("…")
         dir_browse.setObjectName("SecondaryButton")
-        dir_browse.setFixedWidth(36)
+        dir_browse.setFixedSize(28, 28)
         dir_browse.clicked.connect(self._browse_backup_dir)
-        dir_row.addWidget(self._backup_dir_edit)
-        dir_row.addWidget(dir_browse)
-        config_layout.addLayout(dir_row)
 
-        root.addWidget(config)
-        root.addSpacing(12)
+        hdr.addWidget(dir_lbl)
+        hdr.addWidget(self._backup_dir_edit)
+        hdr.addWidget(dir_browse)
 
-        # Main splitter
+        root.addLayout(hdr)
+        root.addSpacing(10)
+
+        # Main splitter (horizontal: left panel | right panel)
         splitter = QSplitter(Qt.Horizontal)
 
-        # Left: create backup + history
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 8, 0)
-        left_layout.setSpacing(12)
+        # Left panel: vertical splitter (create card | history)
+        left_vsplit = QSplitter(Qt.Vertical)
+        left_vsplit.setContentsMargins(0, 0, 8, 0)
 
-        # Create backup card
+        # ── Create backup card ─────────────────────────────────────────────
         create_card = QFrame()
         create_card.setObjectName("Card")
         create_layout = QVBoxLayout(create_card)
@@ -131,16 +124,34 @@ class BackupSyncModule(QWidget):
         notes_row.addWidget(self._notes_edit)
         create_layout.addLayout(notes_row)
 
+        self._exclude_samples_cb = QCheckBox("Ohne Samples-Ordner (schneller, kleiner)")
+        self._exclude_samples_cb.setToolTip(
+            "Sichert nur SONGS, KITS, SYNTHS.\n"
+            "Samples sind meist 90% des Speicherplatzes."
+        )
+        create_layout.addWidget(self._exclude_samples_cb)
+
         self._create_btn = QPushButton("💾  Backup jetzt erstellen")
         self._create_btn.setObjectName("SuccessButton")
-        self._create_btn.setFixedHeight(40)
+        self._create_btn.setMinimumHeight(40)
         self._create_btn.clicked.connect(self._create_backup)
         create_layout.addWidget(self._create_btn)
 
-        left_layout.addWidget(create_card)
+        left_vsplit.addWidget(create_card)
 
-        # Backup history table
-        left_layout.addWidget(self._lbl("BACKUP-VERLAUF", "SectionTitle"))
+        # ── Backup history ─────────────────────────────────────────────────
+        history_widget = QWidget()
+        history_layout = QVBoxLayout(history_widget)
+        history_layout.setContentsMargins(0, 4, 0, 0)
+        history_layout.setSpacing(8)
+
+        history_layout.addWidget(self._lbl("BACKUP-VERLAUF", "SectionTitle"))
+
+        refresh_btn = QPushButton("🔄  Verlauf laden")
+        refresh_btn.setObjectName("SecondaryButton")
+        refresh_btn.setMinimumHeight(32)
+        refresh_btn.clicked.connect(self._load_history)
+        history_layout.addWidget(refresh_btn)
 
         self._history_table = QTableWidget(0, 4)
         self._history_table.setHorizontalHeaderLabels(["Datum", "Bezeichnung", "Größe", "Dateien"])
@@ -157,33 +168,34 @@ class BackupSyncModule(QWidget):
         self._history_table.setColumnWidth(2, 75)
         self._history_table.setColumnWidth(3, 75)
         self._history_table.itemSelectionChanged.connect(self._on_backup_selected)
-
-        refresh_btn = QPushButton("🔄  Verlauf laden")
-        refresh_btn.setObjectName("SecondaryButton")
-        refresh_btn.setFixedHeight(32)
-        refresh_btn.clicked.connect(self._load_history)
-
-        left_layout.addWidget(refresh_btn)
-        left_layout.addWidget(self._history_table, 1)
+        history_layout.addWidget(self._history_table, 1)
 
         # History actions
         hist_btn_row = QHBoxLayout()
         self._restore_btn = QPushButton("♻  Wiederherstellen")
         self._restore_btn.setObjectName("SuccessButton")
+        self._restore_btn.setMinimumHeight(32)
+        self._restore_btn.setMinimumWidth(140)
         self._restore_btn.setEnabled(False)
         self._restore_btn.clicked.connect(self._restore_selected)
 
         self._delete_backup_btn = QPushButton("🗑  Backup löschen")
         self._delete_backup_btn.setObjectName("DangerButton")
+        self._delete_backup_btn.setMinimumHeight(32)
+        self._delete_backup_btn.setMinimumWidth(130)
         self._delete_backup_btn.setEnabled(False)
         self._delete_backup_btn.clicked.connect(self._delete_selected_backup)
 
         hist_btn_row.addWidget(self._restore_btn)
         hist_btn_row.addWidget(self._delete_backup_btn)
         hist_btn_row.addStretch()
-        left_layout.addLayout(hist_btn_row)
+        history_layout.addLayout(hist_btn_row)
 
-        splitter.addWidget(left)
+        left_vsplit.addWidget(history_widget)
+        left_vsplit.setStretchFactor(0, 0)   # create card: feste Größe
+        left_vsplit.setStretchFactor(1, 1)   # history: wächst mit
+
+        splitter.addWidget(left_vsplit)
 
         # Right: backup contents
         right = QWidget()
@@ -261,7 +273,10 @@ class BackupSyncModule(QWidget):
         self._create_btn.setEnabled(False)
         self._progress.setVisible(True)
 
-        self._worker = BackupWorker(self._sd_root, self._backup_dir, label, notes)
+        self._worker = BackupWorker(
+            self._sd_root, self._backup_dir, label, notes,
+            exclude_samples=self._exclude_samples_cb.isChecked()
+        )
         self._worker.progress.connect(lambda p, m: (
             self._progress.setValue(p),
             self._status.setText(m)
@@ -360,6 +375,13 @@ class BackupSyncModule(QWidget):
             return
         item = self._history_table.item(rows[0].row(), 0)
         entry: BackupEntry = item.data(Qt.UserRole)
+
+        if entry.exclude_samples:
+            QMessageBox.information(
+                self, "Hinweis",
+                "Dieses Backup enthält keinen Samples-Ordner.\n"
+                "Nur SONGS, KITS und SYNTHS werden wiederhergestellt."
+            )
 
         if not self._sd_root:
             dest = QFileDialog.getExistingDirectory(self, "Wiederherstellungs-Ziel wählen", "")

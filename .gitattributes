@@ -1,0 +1,19 @@
+# Normalize line endings to LF on commit (Windows/macOS/Linux safe)
+* text=auto
+
+# Explicitly declare text files
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.bat text eol=crlf
+*.iss text eol=crlf
+*.spec text eol=lf
+
+# Declare binary files
+*.png binary
+*.ico binary
+*.exe binary
+*.zip binary

@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Kit
+from ..core.staging import StagingStore, PendingChange, ChangeType
 
 
 class PadWidget(QFrame):
@@ -72,6 +73,7 @@ class KitManagerModule(QWidget):
         self._current_kit: Optional[Kit] = None
         self._pads: list[PadWidget] = []
         self._history = None
+        self._staging: Optional[StagingStore] = None
         self._build_ui()
 
     def _build_ui(self):
@@ -87,10 +89,6 @@ class KitManagerModule(QWidget):
         hdr.addLayout(col)
         hdr.addStretch()
 
-        self._import_btn = QPushButton("⬇  Kit importieren")
-        self._import_btn.clicked.connect(self._import_kit)
-        self._import_btn.setFixedHeight(36)
-        hdr.addWidget(self._import_btn)
         root.addLayout(hdr)
         root.addSpacing(14)
 
@@ -99,23 +97,24 @@ class KitManagerModule(QWidget):
         tb.setObjectName("Card")
         tb_layout = QHBoxLayout(tb)
         tb_layout.setContentsMargins(12, 8, 12, 8)
-        tb_layout.setSpacing(8)
+        tb_layout.setSpacing(6)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Kits suchen…")
         self._search.textChanged.connect(self._filter)
 
-        self._rename_btn = QPushButton("✏  Umbenennen")
+        self._rename_btn = QPushButton("✏ Umbenennen")
         self._rename_btn.setObjectName("SecondaryButton")
         self._rename_btn.clicked.connect(self._rename_selected)
         self._rename_btn.setEnabled(False)
 
-        self._dupe_btn = QPushButton("📋  Duplizieren")
+        self._dupe_btn = QPushButton("📋 Duplizieren")
         self._dupe_btn.setObjectName("SecondaryButton")
         self._dupe_btn.clicked.connect(self._duplicate_selected)
         self._dupe_btn.setEnabled(False)
 
-        self._norm_btn = QPushButton("🔊  Volumes normalisieren")
+        self._norm_btn = QPushButton("🔊 Normalisieren")
+        self._norm_btn.setObjectName("SecondaryButton")
         self._norm_btn.setToolTip(
             "WAV-Dateien analysieren (RMS) und Pad-Volumes angleichen,\n"
             "sodass alle Pads gleich laut klingen."
@@ -123,7 +122,7 @@ class KitManagerModule(QWidget):
         self._norm_btn.clicked.connect(self._normalize_volumes)
         self._norm_btn.setEnabled(False)
 
-        self._cap_master_btn = QPushButton("⬇  Master-Vol.")
+        self._cap_master_btn = QPushButton("⬇ Master")
         self._cap_master_btn.setObjectName("SecondaryButton")
         self._cap_master_btn.setToolTip(
             "Kit-Master-Volume auf eine Maximallautstärke begrenzen.\n"
@@ -132,7 +131,7 @@ class KitManagerModule(QWidget):
         self._cap_master_btn.clicked.connect(self._cap_kit_master)
         self._cap_master_btn.setEnabled(False)
 
-        self._cap_pads_btn = QPushButton("⬇  Pad-Vols.")
+        self._cap_pads_btn = QPushButton("⬇ Pads")
         self._cap_pads_btn.setObjectName("SecondaryButton")
         self._cap_pads_btn.setToolTip(
             "Alle Pad-Volumes auf eine Maximallautstärke begrenzen.\n"
@@ -141,8 +140,15 @@ class KitManagerModule(QWidget):
         self._cap_pads_btn.clicked.connect(self._cap_pad_volumes)
         self._cap_pads_btn.setEnabled(False)
 
-        self._delete_btn = QPushButton("🗑  Löschen")
+        self._import_btn = QPushButton("⬇ Importieren")
+        self._import_btn.setObjectName("SecondaryButton")
+        self._import_btn.setToolTip("Kit-XML aus Dateisystem importieren")
+        self._import_btn.clicked.connect(self._import_kit)
+
+        self._delete_btn = QPushButton("🗑")
         self._delete_btn.setObjectName("DangerButton")
+        self._delete_btn.setToolTip("Ausgewähltes Kit löschen")
+        self._delete_btn.setFixedWidth(34)
         self._delete_btn.clicked.connect(self._delete_selected)
         self._delete_btn.setEnabled(False)
 
@@ -153,6 +159,7 @@ class KitManagerModule(QWidget):
         tb_layout.addWidget(self._norm_btn)
         tb_layout.addWidget(self._cap_master_btn)
         tb_layout.addWidget(self._cap_pads_btn)
+        tb_layout.addWidget(self._import_btn)
         tb_layout.addWidget(self._delete_btn)
         root.addWidget(tb)
         root.addSpacing(8)
@@ -174,7 +181,6 @@ class KitManagerModule(QWidget):
         self._table.setColumnWidth(1, 55)
         self._table.setColumnWidth(2, 80)
         self._table.setMinimumWidth(240)
-        self._table.setMaximumWidth(320)
         self._table.itemSelectionChanged.connect(self._on_kit_selected)
         splitter.addWidget(self._table)
 
@@ -203,7 +209,6 @@ class KitManagerModule(QWidget):
             pad.clicked.connect(self._on_pad_click)
             self._pads.append(pad)
             row, col = divmod(i, 4)
-            # Deluge pads: bottom row = pads 13-16 visually (like hardware)
             grid_row = 3 - row
             self._grid_layout.addWidget(pad, grid_row, col)
 
@@ -243,6 +248,13 @@ class KitManagerModule(QWidget):
         root.addSpacing(6)
         root.addWidget(self._status)
 
+        from ..widgets.pending_panel import PendingPanel
+        self._pending_panel = PendingPanel(
+            "kit_manager", StagingStore(),
+            rescan_fn=self.request_rescan.emit
+        )
+        root.addWidget(self._pending_panel)
+
         self._selected_pad: Optional[int] = None
 
     def _lbl(self, text, obj=""):
@@ -253,6 +265,12 @@ class KitManagerModule(QWidget):
 
     def set_history(self, history):
         self._history = history
+
+    def set_staging(self, staging: StagingStore):
+        self._staging = staging
+        if hasattr(self, '_pending_panel'):
+            self._pending_panel._staging = staging
+            self._pending_panel.refresh()
 
     def update_index(self, index: SDCardIndex):
         self._index = index
@@ -307,14 +325,12 @@ class KitManagerModule(QWidget):
 
     def _show_kit_pads(self, kit: Kit):
         self._kit_title.setText(f"🥁  {kit.name}")
-        # Reset all pads
         for pad in self._pads:
             pad.set_sample("—", True)
             pad.setObjectName("Card")
             pad.style().unpolish(pad)
             pad.style().polish(pad)
 
-        # Fill with sample refs
         for i, ref in enumerate(kit.sample_refs[:16]):
             if i < len(self._pads):
                 name = Path(ref.path.replace("\\", "/")).stem
@@ -358,7 +374,6 @@ class KitManagerModule(QWidget):
             QMessageBox.warning(self, "Fehler", "Datei muss auf der SD-Card liegen.")
             return
 
-        # Update XML
         kit = self._current_kit
         refs = kit.sample_refs
         if self._selected_pad < len(refs):
@@ -381,20 +396,22 @@ class KitManagerModule(QWidget):
         if new_path.exists():
             QMessageBox.warning(self, "Fehler", "Datei existiert bereits.")
             return
-        try:
-            kit.file_path.rename(new_path)
-            self._status.setText(f"✅  Umbenannt → {new_name}")
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _old, _new = kit.file_path, new_path
-                self._history.push(Action(
-                    description=f"Kit umbenannt: {kit.name} → {new_name}",
-                    undo_fn=lambda o=_old, n=_new: n.rename(o),
-                    redo_fn=lambda o=_old, n=_new: o.rename(n),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.RENAME,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+                new_name=f"{new_name.strip()}.XML",
+            ))
+            self._status.setText(f"⏳  Umbenennen vorgemerkt: {kit.name} → {new_name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                kit.file_path.rename(new_path)
+                self._status.setText(f"✅  Umbenannt → {new_name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _duplicate_selected(self):
         kit = self._selected_kit()
@@ -427,38 +444,30 @@ class KitManagerModule(QWidget):
         kit = self._selected_kit()
         if not kit:
             return
-        reply = QMessageBox.question(self, "Löschen", f"'{kit.name}' löschen?", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(
+            self, "Löschen",
+            f"'{kit.name}' löschen?\n(Erst gespeichert wenn du 'Speichern' drückst)",
+            QMessageBox.Yes | QMessageBox.No
+        )
         if reply != QMessageBox.Yes:
             return
-        try:
-            from ..core.history import move_to_trash, restore_from_trash, Action
-            original_path = kit.file_path
-            state = [move_to_trash(original_path)]
-            self._status.setText(f"🗑  Gelöscht: {kit.name}")
-            self.request_rescan.emit()
-            if self._history:
-                _op = original_path
-                self._history.push(Action(
-                    description=f"Kit gelöscht: {kit.name}",
-                    undo_fn=lambda s=state, op=_op: restore_from_trash(s[0], op),
-                    redo_fn=lambda s=state, op=_op: s.__setitem__(0, move_to_trash(op)),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.DELETE,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+            ))
+            self._status.setText(f"⏳  Zum Löschen vorgemerkt: {kit.name}")
+            self._pending_panel.refresh()
+        else:
+            try:
+                kit.file_path.unlink()
+                self._status.setText(f"🗑  Gelöscht: {kit.name}")
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _normalize_volumes(self):
-        """
-        Option B — Audio-RMS-Analyse:
-        Liest jede WAV-Datei eines Pads, misst den RMS-Pegel und setzt die
-        Deluge-Pad-Volumes so, dass alle Pads gleich laut klingen.
-        Der lauteste Pad behält sein Volume; leisere werden proportional angehoben.
-
-        Fixes vs. alter Implementierung:
-        - Verwendet _read_xml/_write_xml (encoding-sicher)
-        - Ersetzt NUR Volumes innerhalb <soundSources>, nicht das Kit-Master-Volume
-        - Ersetzt die Werte positionsgenau (kein blindes globales Regex)
-        - Emittiert request_rescan nach dem Schreiben
-        """
         kit = self._selected_kit()
         if not kit or not self._index:
             return
@@ -475,7 +484,6 @@ class KitManagerModule(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        # ── 1. XML parsen ─────────────────────────────────────────────────
         from ..core.xml_parser import _parse_xml_robust
         from ..core.file_ops import _read_xml, _write_xml
 
@@ -489,25 +497,14 @@ class KitManagerModule(QWidget):
             QMessageBox.warning(self, "Fehler", "Keine <soundSources> in diesem Kit gefunden.")
             return
 
-        # ── 2. Pad-Infos sammeln ─────────────────────────────────────────
-        # Deluge hat zwei XML-Formate:
-        #   Alt (Firmware <4):  Parameter als Child-Elemente
-        #                       <osc1><fileName>…</fileName></osc1>
-        #                       <defaultParams><volume>0x…</volume></defaultParams>
-        #   Neu (Firmware 4+):  Parameter als Attribute
-        #                       <osc1 fileName="…" …>
-        #                       <defaultParams volume="0x…" …>
         pads = []
         for sound in sound_sources.findall("sound"):
-            # ── Sample-Pfad ──────────────────────────────────────────────
             osc1 = sound.find("osc1")
             if osc1 is None:
                 continue
 
-            # Neues Format: Attribut auf <osc1>
             file_name = osc1.get("fileName", "").strip()
             if not file_name:
-                # Altes Format: Child-Element <fileName>
                 fname_elem = osc1.find("fileName")
                 if fname_elem is not None:
                     file_name = (fname_elem.text or "").strip()
@@ -520,18 +517,15 @@ class KitManagerModule(QWidget):
             if not abs_path.exists():
                 continue
 
-            # ── Per-Pad-Volume ───────────────────────────────────────────
             dp = sound.find("defaultParams")
             if dp is None:
                 continue
 
-            # Neues Format: Attribut auf <defaultParams>
             vol_attr = dp.get("volume", "").strip()
             if vol_attr:
                 vol_format = "attr"
                 current_vol = vol_attr
             else:
-                # Altes Format: Child-Element <volume>
                 vol_elem = dp.find("volume")
                 if vol_elem is None or not (vol_elem.text or "").strip():
                     continue
@@ -541,7 +535,7 @@ class KitManagerModule(QWidget):
             pads.append({
                 "abs_path": abs_path,
                 "current_vol": current_vol,
-                "vol_format": vol_format,   # "attr" | "elem"
+                "vol_format": vol_format,
                 "rms": None,
                 "new_vol": None,
             })
@@ -553,7 +547,6 @@ class KitManagerModule(QWidget):
             )
             return
 
-        # ── 3. RMS messen ────────────────────────────────────────────────
         try:
             import soundfile as sf
             import numpy as np
@@ -584,14 +577,10 @@ class KitManagerModule(QWidget):
             )
             return
 
-        # ── 4. Neue Volumes berechnen ────────────────────────────────────
-        # Deluge signed-int32 ↔ lineare Amplitude [0..1]:
-        #   0x80000000 = 0 (Stille), 0x7FFFFFFF = 1.0 (Maximum)
-        #   Beispiel: 0x3504F334 ≈ 0.707 (−3 dB) — Deluge-Standardwert
         def vol_to_amp(hex_str: str) -> float:
             v = int(hex_str, 16)
             if v >= 0x80000000:
-                v -= 0x100000000          # unsigned → signed
+                v -= 0x100000000
             return (v + 2_147_483_648) / 4_294_967_295
 
         def amp_to_vol(amp: float) -> str:
@@ -599,15 +588,12 @@ class KitManagerModule(QWidget):
             v = int(amp * 4_294_967_295) - 2_147_483_648
             return f"0x{v & 0xFFFFFFFF:08X}"
 
-        target_rms = max(p["rms"] for p in valid_pads)   # lautester Pad = Referenz
+        target_rms = max(p["rms"] for p in valid_pads)
         for pad in valid_pads:
             gain = target_rms / pad["rms"]
             new_amp = min(vol_to_amp(pad["current_vol"]) * gain, 1.0)
             pad["new_vol"] = amp_to_vol(new_amp)
 
-        # ── 5. Änderungen in XML-Text schreiben ──────────────────────────
-        # Nur innerhalb des <soundSources>-Blocks ersetzen, damit das
-        # Kit-Master-Volume (<kit><defaultParams><volume>) unberührt bleibt.
         import re
         text, enc = _read_xml(kit.file_path)
 
@@ -621,11 +607,9 @@ class KitManagerModule(QWidget):
         for pad in valid_pads:
             if pad["new_vol"] and pad["new_vol"] != pad["current_vol"]:
                 if pad["vol_format"] == "attr":
-                    # Neues Format: volume="0x…" als Attribut
                     old_tag = f'volume="{pad["current_vol"]}"'
                     new_tag = f'volume="{pad["new_vol"]}"'
                 else:
-                    # Altes Format: <volume>0x…</volume> als Child-Element
                     old_tag = f'<volume>{pad["current_vol"]}</volume>'
                     new_tag = f'<volume>{pad["new_vol"]}</volume>'
 
@@ -641,27 +625,31 @@ class KitManagerModule(QWidget):
         start, end = sources_match.start(1), sources_match.end(1)
         new_text = text[:start] + sources_block + text[end:]
 
-        try:
-            _write_xml(kit.file_path, new_text, enc)
-            skipped = len(pads) - len(valid_pads)
-            skip_note = f" ({skipped} ohne Sample übersprungen)" if skipped else ""
-            self._status.setText(
-                f"✅  {changed} Pad-Volume(s) normalisiert (RMS-Analyse){skip_note}."
-            )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Volumes normalisiert: {kit.name}",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        skipped = len(pads) - len(valid_pads)
+        skip_note = f" ({skipped} ohne Sample übersprungen)" if skipped else ""
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: {changed} Pad-Volume(s) normalisiert{skip_note}.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(kit.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  {changed} Pad-Volume(s) normalisiert (RMS-Analyse){skip_note}."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _import_kit(self):
         if not self._index:
+            QMessageBox.warning(self, "Kein SD-Ordner", "Bitte zuerst einen SD-Card-Ordner laden.")
             return
         path, _ = QFileDialog.getOpenFileName(self, "Kit importieren", "", "XML Files (*.xml *.XML)")
         if not path:
@@ -696,11 +684,6 @@ class KitManagerModule(QWidget):
         return f"0x{v & 0xFFFFFFFF:08X}"
 
     def _cap_kit_master(self):
-        """
-        Begrenzt den Kit-Master-Volume (kit/defaultParams/volume) auf einen
-        vom User eingegebenen Maximalwert (0–50).
-        Nur Werte ÜBER dem Limit werden angepasst — leisere bleiben unberührt.
-        """
         kit = self._selected_kit()
         if not kit:
             return
@@ -721,7 +704,6 @@ class KitManagerModule(QWidget):
             QMessageBox.warning(self, "Fehler", "Kit-XML konnte nicht geparst werden.")
             return
 
-        # Kit-Master-Volume = <defaultParams> direkt unter dem <kit>-Root
         dp = root.find("defaultParams")
         if dp is None:
             self._status.setText("ℹ  Kein <defaultParams> im Kit-Root gefunden.")
@@ -749,7 +731,6 @@ class KitManagerModule(QWidget):
         new_hex = self._display_to_vol(threshold)
         text, enc = _read_xml(kit.file_path)
 
-        # Nur im Bereich VOR <soundSources> ersetzen — Pad-Volumes niemals berühren
         sources_pos = text.find('<soundSources>')
         pre_block  = text[:sources_pos] if sources_pos >= 0 else text
         post_block = text[sources_pos:] if sources_pos >= 0 else ""
@@ -766,29 +747,27 @@ class KitManagerModule(QWidget):
             return
 
         new_text = new_pre + post_block
-        try:
-            _write_xml(kit.file_path, new_text, enc)
-            self._status.setText(
-                f"✅  Kit-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
-            )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Kit-Master begrenzt: {kit.name} → {threshold}/50",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: Kit-Master {current_display:.1f}/50 → {threshold}/50.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(kit.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  Kit-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
 
     def _cap_pad_volumes(self):
-        """
-        Begrenzt alle Pad-Volumes (soundSources/sound/defaultParams/volume) auf
-        einen vom User eingegebenen Maximalwert (0–50).
-        Nur Werte ÜBER dem Limit werden angepasst. Kit-Master bleibt unberührt.
-        """
         kit = self._selected_kit()
         if not kit:
             return
@@ -815,7 +794,6 @@ class KitManagerModule(QWidget):
             self._status.setText("ℹ  Keine <soundSources> in diesem Kit gefunden.")
             return
 
-        # Alle Pad-Volumes sammeln, die über dem Limit liegen
         caps = []
         for sound in sound_sources.findall("sound"):
             dp = sound.find("defaultParams")
@@ -863,19 +841,22 @@ class KitManagerModule(QWidget):
 
         start, end = sources_match.start(1), sources_match.end(1)
         new_text = text[:start] + sources_block + text[end:]
-        try:
-            _write_xml(kit.file_path, new_text, enc)
-            self._status.setText(
-                f"✅  {changed} Pad-Volume(s) auf max. {threshold}/50 begrenzt."
-            )
-            self.request_rescan.emit()
-            if self._history:
-                from ..core.history import Action
-                _path, _enc, _before, _after = kit.file_path, enc, text, new_text
-                self._history.push(Action(
-                    description=f"Pad-Vols. begrenzt: {kit.name} → {threshold}/50",
-                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
-                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
-                ))
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=kit.file_path,
+                source_module="kit_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: {changed} Pad-Volume(s) auf max. {threshold}/50.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(kit.file_path, new_text, enc)
+                self._status.setText(
+                    f"✅  {changed} Pad-Volume(s) auf max. {threshold}/50 begrenzt."
+                )
+                self.request_rescan.emit()
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))

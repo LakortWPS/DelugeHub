@@ -1,85 +1,146 @@
-# DelugeHub v1.0.4
+# DelugeHub
 
-**All-in-One Synthstrom Deluge SD-Card Manager**
+**All-in-One SD Card Manager for the Synthstrom Deluge**
+
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
+![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-green)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+![Version](https://img.shields.io/badge/Version-2.0.2-orange)
+
+DelugeHub is a desktop application for managing the SD card of the [Synthstrom Deluge](https://synthstrom.com/product/deluge/) synthesizer. It lets you browse, edit, rename and export songs, kits, synths and samples — all from your computer, with a non-destructive staging system that only writes changes to disk when you say so.
+
+---
+
+## Screenshots
+
+| Dashboard (Dark) | Dashboard (Light) |
+|---|---|
+| ![Dashboard Dark](docs/screenshots/screenshot-dashboard-dark.png) | ![Dashboard Light](docs/screenshots/screenshot-dashboard-light.png) |
+
+| Song Manager | Kit Manager |
+|---|---|
+| ![Song Manager](docs/screenshots/screenshot-song-manager.png) | ![Kit Manager](docs/screenshots/screenshot-kit-manager.png) |
+
+| Synth Editor | Sample Manager |
+|---|---|
+| ![Synth Editor](docs/screenshots/screenshot-synth-editor.png) | ![Sample Manager](docs/screenshots/screenshot-sample-manager.png) |
+
+| Lost Sample Finder | Batch Hub |
+|---|---|
+| ![Lost Sample Finder](docs/screenshots/screenshot-lost-sample-finder.png) | ![Batch Hub](docs/screenshots/screenshot-batch-hub.png) |
+
+| Backup & Sync | Settings |
+|---|---|
+| ![Backup & Sync](docs/screenshots/screenshot-backup-sync.png) | ![Settings](docs/screenshots/screenshot-settings-dark.png) |
+
 
 ## Features
-- 🏠 **Dashboard** — SD-Card Health, Statistiken, Quick Actions
-- 🎵 **Song Manager** — Songs verwalten, exportieren mit Dependencies
-- 🥁 **Kit Manager** — Kits & Pad-Zuweisungen bearbeiten, Volumes normalisieren
-- 🎹 **Synth Editor** — Parameter bearbeiten, Randomizer, Import/Export
-- 📁 **Sample Manager** — Ordner-Tree, Vorschau, Move/Rename mit auto XML-Update
-- 🔍 **Lost Sample Finder** — Fehlende Samples finden, Auto-Match, Batch-Fix
-- ⚡ **Batch Hub** — Batch Rename/Export/Delete/Normalize für alle Inhaltstypen
-- 💾 **Backup & Sync** — ZIP-Backups, Verlauf, selektives Wiederherstellen
-- ⚙️ **Einstellungen** — SD-Pfad, Theme, Auto-Scan
+
+| Module | Description |
+|---|---|
+| 🎵 **Song Manager** | Browse, rename, duplicate and export songs with all dependencies |
+| 🥁 **Kit Manager** | Edit kits & pad assignments, normalize and cap volumes |
+| 🎹 **Synth Editor** | Edit parameters, randomizer, import/export |
+| 📁 **Sample Manager** | Folder tree, preview, move/rename with automatic XML path update |
+| 🔍 **Lost Sample Finder** | Find missing samples, auto-match, batch fix |
+| ⚡ **Batch Hub** | Bulk rename, export, delete, normalize across all content types |
+| 💾 **Backup & Sync** | Create ZIP backups, manage history, selectively restore |
+| ⚙️ **Settings** | SD path, theme (dark/light), auto-scan |
+
+---
+
+## Requirements
+
+- Python 3.10 or newer
+- [PySide6](https://pypi.org/project/PySide6/) >= 6.6.0
+- [lxml](https://pypi.org/project/lxml/) >= 5.0.0
+- Windows, macOS or Linux
+- Optional: `sounddevice` + `numpy` for audio preview in Sample Manager
+
+---
 
 ## Installation
+
+### Run from source
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-### Optionale Audio-Vorschau (Sample Manager):
+Optional audio preview:
+
 ```bash
 pip install sounddevice numpy
 ```
 
-## Starten
-```bash
-python main.py
+### Windows installer (no Python required)
+
+Download `DelugeHub-2.0.2-Setup.exe` from the [latest release](https://github.com/LakortWPS/DelugeHub/releases/latest) and run it. No Python installation needed.
+
+---
+
+## Project Structure
+
+```
+DelugeHub/
+├── main.py                  ← Entry point
+├── requirements.txt
+├── CHANGELOG.md
+├── installer/               ← Windows installer build system
+│   ├── DelugeHub.spec       ← PyInstaller config
+│   ├── setup.iss            ← Inno Setup script
+│   ├── build_installer.bat  ← One-click build script
+│   └── README.md            ← Build instructions
+└── app/
+    ├── main_window.py       ← Main window, StagingStore, status bar
+    ├── theme.py             ← Dark + Light QSS stylesheets
+    ├── core/
+    │   ├── models.py        ← Data models (Song, Kit, Synth, …)
+    │   ├── xml_parser.py    ← Deluge XML parser (firmware 1.x + 2.x)
+    │   ├── sd_scanner.py    ← Async SD-card scanner
+    │   ├── file_ops.py      ← File operations + XML path update
+    │   ├── staging.py       ← StagingStore, PendingChange, ChangeType
+    │   ├── lost_finder.py   ← Lost sample logic
+    │   └── backup.py        ← Backup/restore, ZIP management
+    ├── widgets/
+    │   └── pending_panel.py ← PendingPanel widget (staging display)
+    └── modules/
+        ├── song_manager.py
+        ├── kit_manager.py
+        ├── synth_editor.py
+        ├── sample_manager.py
+        ├── lost_sample_finder.py
+        ├── batch_hub.py
+        ├── backup_sync.py
+        └── settings_module.py
 ```
 
-## Projektstruktur
+---
+
+## Building a Windows Installer
+
+See [installer/README.md](installer/README.md) for full instructions.
+
+**Requirements:** PyInstaller + Inno Setup 6
+
 ```
-delugyhub/
-├── main.py                      ← Entry point
-├── requirements.txt
-├── app/
-│   ├── main_window.py           ← Hauptfenster
-│   ├── theme.py                 ← Dark + Light QSS
-│   ├── core/
-│   │   ├── models.py            ← Datenmodelle
-│   │   ├── xml_parser.py        ← Deluge XML Parser
-│   │   ├── sd_scanner.py        ← Async Scanner
-│   │   ├── file_ops.py          ← Datei-Operationen + XML-Update
-│   │   ├── lost_finder.py       ← Lost Sample Logik
-│   │   └── backup.py            ← Backup/Restore
-│   └── modules/
-│       ├── dashboard.py
-│       ├── song_manager.py
-│       ├── kit_manager.py
-│       ├── synth_editor.py
-│       ├── sample_manager.py
-│       ├── lost_sample_finder.py
-│       ├── batch_hub.py
-│       ├── backup_sync.py
-│       └── settings_module.py
+installer\build_installer.bat
 ```
+
+**Output:** `installer\output\DelugeHub-2.0.2-Setup.exe`
+
+---
 
 ## Changelog
 
-### v1.0.4
-- Fix: Kaputte Deluge XML-Dateien mit fehlenden Closing-Tags (z.B. `</modKnobs>`) werden jetzt via lxml automatisch repariert und geladen
-- Fix: Alle Tabellen-Spaltenheader vollständig sichtbar — Modus auf `Interactive` geändert und Breiten angepasst (Kit Manager, Song Manager, Synth Editor, Sample Manager, Backup & Sync)
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
-### v1.0.3
-- Fix: XML-Parser erkennt jetzt das Deluge Firmware 2.0.0-beta Format korrekt — Dateien mit `<firmwareVersion>` und `<earliestCompatibleFirmware>` vor dem eigentlichen Content-Element werden jetzt fehlerfrei geparst
-- Fix: Unescapte `&`-Zeichen in Deluge XML-Dateien werden automatisch zu `&amp;` korrigiert (`invalid token` Fehler)
-- Fix: Deprecated `Qt.AA_UseHighDpiPixmaps` Warning beim Start entfernt (in PySide6 6.x standardmäßig aktiv)
+**Latest:** [v2.0.2](https://github.com/LakortWPS/DelugeHub/releases/tag/v2.0.2) — Windows installer build system, Batch Hub fix, synth_editor null byte fix.
 
-### v1.0.2
-- Fix: App-Version in der Sidebar wird jetzt dynamisch aus `APP_VERSION` geladen (war hardcoded `v1.0`)
-- Fix: XML-Parser ist jetzt robust gegen ungültige Steuerzeichen in Deluge-Dateien (`invalid token`)
-- Fix: XML-Parser behandelt jetzt "junk after document element" — Deluge paddet manche Dateien mit Null-Bytes nach dem Root-Tag
+---
 
-### v1.0.1
-- Fix: `QLabel`-Hintergründe sind jetzt transparent — kein sichtbarer Kasten mehr hinter Texten auf Karten
-- Fix: `QPushButton` zeigt nach dem Klicken keinen gepunkteten Fokus-Rahmen mehr
+## License
 
-### v1.0.0
-- Erster Release
-
-## Community
-- https://delugecommunity.com
-- MIT License
+This project is licensed under the [MIT License](LICENSE).
