@@ -1,3 +1,7 @@
+Deluge files/
+*.patch
+build_log.txt
+
 # Python
 __pycache__/
 *.py[cod]
