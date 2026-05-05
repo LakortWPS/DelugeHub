@@ -212,6 +212,7 @@ class SampleManagerModule(QWidget):
         self._index: Optional[SDCardIndex] = None
         self._player = AudioPlayer()
         self._current_sample: Optional[Sample] = None
+        self._history = None
         self._build_ui()
 
     def _build_ui(self):
@@ -385,6 +386,10 @@ class SampleManagerModule(QWidget):
         return l
 
     # ── Public API ─────────────────────────────────────────────────────────
+    def set_history(self, history):
+        """Register the ActionHistory for undo/redo."""
+        self._history = history
+
     def update_index(self, index: SDCardIndex):
         self._index = index
         self._populate_tree()
@@ -557,6 +562,19 @@ class SampleManagerModule(QWidget):
         if new_abs:
             self._status.setText(f"✅  Umbenannt → {new_name}  |  {len(updated)} XMLs aktualisiert")
             self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                from ..core.file_ops import rename_sample as _rename_sample
+                _old_path = s.file_path
+                _new_abs = new_abs
+                _old_name = s.name
+                _new_name = new_name.strip()
+                _root = self._index.root_path
+                self._history.push(Action(
+                    description=f"Sample umbenannt: {_old_name} → {_new_name}",
+                    undo_fn=lambda op=_old_path, nn=_old_name, r=_root, na=_new_abs: _rename_sample(na, nn, r),
+                    redo_fn=lambda op=_old_path, nn=_new_name, r=_root: _rename_sample(op, nn, r),
+                ))
         else:
             QMessageBox.warning(self, "Fehler", f"Umbenennen fehlgeschlagen.")
 
@@ -575,6 +593,19 @@ class SampleManagerModule(QWidget):
         if new_abs:
             self._status.setText(f"✅  Verschoben nach {Path(folder).name}  |  {len(updated)} XMLs aktualisiert")
             self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                from ..core.file_ops import move_sample as _move_sample
+                _old_path = s.file_path
+                _new_abs = new_abs
+                _old_folder = s.file_path.parent
+                _new_folder = Path(folder)
+                _root = self._index.root_path
+                self._history.push(Action(
+                    description=f"Sample verschoben: {s.name}",
+                    undo_fn=lambda na=_new_abs, of=_old_folder, r=_root: _move_sample(na, of, r),
+                    redo_fn=lambda op=_old_path, nf=_new_folder, r=_root: _move_sample(op, nf, r),
+                ))
         else:
             QMessageBox.warning(self, "Fehler", "Verschieben fehlgeschlagen.")
 
@@ -600,11 +631,21 @@ class SampleManagerModule(QWidget):
             if reply != QMessageBox.Yes:
                 return
 
-        if delete_sample(s.file_path):
+        try:
+            from ..core.history import move_to_trash, restore_from_trash, Action
+            original_path = s.file_path
+            state = [move_to_trash(original_path)]
             self._status.setText(f"🗑  Gelöscht: {s.name}")
             self.request_rescan.emit()
-        else:
-            QMessageBox.warning(self, "Fehler", "Löschen fehlgeschlagen.")
+            if self._history:
+                _op = original_path
+                self._history.push(Action(
+                    description=f"Sample gelöscht: {s.name}",
+                    undo_fn=lambda st=state, op=_op: restore_from_trash(st[0], op),
+                    redo_fn=lambda st=state, op=_op: st.__setitem__(0, move_to_trash(op)),
+                ))
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", f"Löschen fehlgeschlagen: {e}")
 
     # ── Batch import ───────────────────────────────────────────────────────
     def _batch_import(self):

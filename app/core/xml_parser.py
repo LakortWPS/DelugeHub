@@ -301,12 +301,24 @@ def parse_synth(file_path: Path, sd_root: Path) -> Optional[Synth]:
         osc2_type = "square"
         filter_type = "lpf"
 
-        # OSC types
-        oscs = root.findall(".//osc")
-        if len(oscs) >= 1:
-            osc1_type = oscs[0].get("type", "square")
-        if len(oscs) >= 2:
-            osc2_type = oscs[1].get("type", "square")
+        # OSC types — Deluge uses <osc1> / <osc2>, not <osc>.
+        # New firmware (3.x+): type as attribute  → <osc1 type="saw" …>
+        # Old firmware (2.x):  type as child elem → <osc1><type>saw</type></osc1>
+        def _get_osc_type(osc_elem) -> str:
+            if osc_elem is None:
+                return "square"
+            # Attribute format (new firmware)
+            t = osc_elem.get("type", "").strip()
+            if t:
+                return t
+            # Child-element format (old firmware)
+            type_child = osc_elem.find("type")
+            if type_child is not None and (type_child.text or "").strip():
+                return type_child.text.strip()
+            return "square"
+
+        osc1_type = _get_osc_type(root.find(".//osc1"))
+        osc2_type = _get_osc_type(root.find(".//osc2"))
 
         # Filter type
         lpf = root.find(".//lpf")

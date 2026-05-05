@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QEvent
 
 from .theme import get_theme
+from .core.history import ActionHistory
 from .core.sd_scanner import ScanWorker
 from .modules.dashboard import DashboardModule
 from .modules.lost_sample_finder import LostSampleFinderModule
@@ -80,6 +81,11 @@ class MainWindow(QMainWindow):
         self._scan_worker = None
         self._nav_buttons: dict[str, NavButton] = {}
         self._sidebar_collapsed = False
+        self._backup_banner_dismissed = False
+
+        # Global undo/redo history — shared across all modules
+        self._history = ActionHistory()
+        self._history.set_on_change(self._on_history_changed)
 
         self._build_ui()
         self._apply_theme(self._current_theme)
@@ -114,6 +120,7 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
 
         root.addWidget(self._build_top_bar())
+        root.addWidget(self._build_backup_banner())  # hidden until first scan
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -207,6 +214,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._scan_btn)
 
         layout.addStretch()
+
+        self._undo_btn = QPushButton("↩")
+        self._undo_btn.setObjectName("IconButton")
+        self._undo_btn.setFixedSize(36, 36)
+        self._undo_btn.setEnabled(False)
+        self._undo_btn.setToolTip("Rückgängig")
+        self._undo_btn.clicked.connect(self._do_undo)
+        layout.addWidget(self._undo_btn)
+
+        self._redo_btn = QPushButton("↪")
+        self._redo_btn.setObjectName("IconButton")
+        self._redo_btn.setFixedSize(36, 36)
+        self._redo_btn.setEnabled(False)
+        self._redo_btn.setToolTip("Wiederholen")
+        self._redo_btn.clicked.connect(self._do_redo)
+        layout.addWidget(self._redo_btn)
 
         self._theme_btn = QPushButton("🌙")
         self._theme_btn.setObjectName("IconButton")
@@ -359,6 +382,11 @@ class MainWindow(QMainWindow):
 
         # Settings
         settings_mod = reg("settings", SettingsModule(self._settings))
+
+        # Pass history to all modules that support undo/redo
+        for module in self._modules.values():
+            if hasattr(module, "set_history"):
+                module.set_history(self._history)
         settings_mod.sd_path_changed.connect(self._on_sd_path_changed)
         settings_mod.theme_changed.connect(self._apply_theme)
         settings_mod.auto_scan_changed.connect(self._on_auto_scan_changed)
@@ -448,6 +476,10 @@ class MainWindow(QMainWindow):
             if hasattr(module, "update_index"):
                 module.update_index(index)
 
+        # Show backup warning banner once per session
+        if not self._backup_banner_dismissed:
+            self._backup_banner.setVisible(True)
+
         self._navigate("dashboard")
 
     def _on_scan_error(self, msg: str):
@@ -472,6 +504,70 @@ class MainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(get_theme(theme))
         self._theme_btn.setText("☀️" if theme == "dark" else "🌙")
         self._save_settings()
+
+    # ── Backup Banner ──────────────────────────────────────────────────────
+    def _build_backup_banner(self) -> QWidget:
+        from PySide6.QtWidgets import QHBoxLayout
+        bar = QWidget()
+        bar.setObjectName("BackupBanner")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(8)
+
+        icon = QLabel("⚠")
+        icon.setObjectName("BackupBannerText")
+        layout.addWidget(icon)
+
+        txt = QLabel("Empfehlung: Erstelle ein Backup bevor du Änderungen vornimmst.")
+        txt.setObjectName("BackupBannerText")
+        layout.addWidget(txt, 1)
+
+        go_btn = QPushButton("💾  Backup & Sync →")
+        go_btn.setObjectName("BackupBannerBtn")
+        go_btn.setFixedHeight(26)
+        go_btn.clicked.connect(lambda: (self._navigate("backup_sync"), self._dismiss_backup_banner()))
+        layout.addWidget(go_btn)
+
+        dismiss_btn = QPushButton("✕")
+        dismiss_btn.setObjectName("BackupBannerDismiss")
+        dismiss_btn.setFixedSize(26, 26)
+        dismiss_btn.setToolTip("Hinweis ausblenden")
+        dismiss_btn.clicked.connect(self._dismiss_backup_banner)
+        layout.addWidget(dismiss_btn)
+
+        self._backup_banner = bar
+        bar.setVisible(False)
+        return bar
+
+    def _dismiss_backup_banner(self):
+        self._backup_banner_dismissed = True
+        self._backup_banner.setVisible(False)
+
+    # ── Undo / Redo ────────────────────────────────────────────────────────
+    def _on_history_changed(self, can_undo: bool, can_redo: bool,
+                             undo_desc: str, redo_desc: str):
+        self._undo_btn.setEnabled(can_undo)
+        self._redo_btn.setEnabled(can_redo)
+        self._undo_btn.setToolTip(f"Rückgängig: {undo_desc}" if undo_desc else "Rückgängig")
+        self._redo_btn.setToolTip(f"Wiederholen: {redo_desc}" if redo_desc else "Wiederholen")
+
+    def _do_undo(self):
+        try:
+            desc = self._history.undo()
+            if desc:
+                self._status_label.setText(f"↩  Rückgängig: {desc}")
+                self._trigger_scan()
+        except Exception as e:
+            QMessageBox.warning(self, "Undo fehlgeschlagen", str(e))
+
+    def _do_redo(self):
+        try:
+            desc = self._history.redo()
+            if desc:
+                self._status_label.setText(f"↪  Wiederholt: {desc}")
+                self._trigger_scan()
+        except Exception as e:
+            QMessageBox.warning(self, "Redo fehlgeschlagen", str(e))
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     def closeEvent(self, event):

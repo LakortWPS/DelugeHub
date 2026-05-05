@@ -72,6 +72,26 @@ QPushButton#CollapseButton:hover { background-color: #0F3460; color: #AAAAAA; }
 }
 #StatusLabel { color: #AAAAAA; font-size: 11px; padding: 0 12px; }
 
+/* === Backup Warning Banner === */
+#BackupBanner {
+    background-color: #3A2800;
+    border-bottom: 1px solid #C87800;
+    min-height: 36px; max-height: 36px;
+}
+#BackupBannerText { color: #FFB733; font-size: 12px; padding: 0 12px; }
+QPushButton#BackupBannerBtn {
+    background-color: #C87800; color: #FFFFFF;
+    border: none; border-radius: 4px;
+    padding: 4px 12px; font-size: 12px; font-weight: bold;
+}
+QPushButton#BackupBannerBtn:hover { background-color: #E08800; }
+QPushButton#BackupBannerDismiss {
+    background-color: transparent; color: #C87800;
+    border: 1px solid #C87800; border-radius: 4px;
+    padding: 2px 8px; font-size: 12px;
+}
+QPushButton#BackupBannerDismiss:hover { background-color: #4A3400; }
+
 /* === Scan Overlay === */
 #ScanOverlay { background-color: rgba(26, 26, 46, 210); }
 #ScanOverlayCard { background-color: #16213E; border: 1px solid #1E6FBB; border-radius: 12px; }
@@ -261,6 +281,26 @@ QPushButton#CollapseButton:hover { background-color: #EAF2FB; color: #1E6FBB; }
 /* === Status Bar === */
 #StatusBar { background-color: #EAF2FB; min-height: 28px; max-height: 28px; border-top: 1px solid #BBCCEE; }
 #StatusLabel { color: #888888; font-size: 11px; padding: 0 12px; }
+
+/* === Backup Warning Banner === */
+#BackupBanner {
+    background-color: #FFF3CD;
+    border-bottom: 1px solid #E8A000;
+    min-height: 36px; max-height: 36px;
+}
+#BackupBannerText { color: #856404; font-size: 12px; padding: 0 12px; }
+QPushButton#BackupBannerBtn {
+    background-color: #E8A000; color: #FFFFFF;
+    border: none; border-radius: 4px;
+    padding: 4px 12px; font-size: 12px; font-weight: bold;
+}
+QPushButton#BackupBannerBtn:hover { background-color: #D08000; }
+QPushButton#BackupBannerDismiss {
+    background-color: transparent; color: #856404;
+    border: 1px solid #E8A000; border-radius: 4px;
+    padding: 2px 8px; font-size: 12px;
+}
+QPushButton#BackupBannerDismiss:hover { background-color: #FFE8A0; }
 
 /* === Scan Overlay === */
 #ScanOverlay { background-color: rgba(245, 247, 250, 210); }

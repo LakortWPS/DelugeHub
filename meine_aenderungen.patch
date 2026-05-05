@@ -1,0 +1,578 @@
+diff --git a/app/core/backup.py b/app/core/backup.py
+index 2e9d075..4ac8fff 100644
+--- a/app/core/backup.py
++++ b/app/core/backup.py
+@@ -169,13 +169,26 @@ class BackupWorker(QThread):
+ 
+         file_count = 0
+         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED,
+-                             compresslevel=6) as zf:
++                             compresslevel=6, allowZip64=True) as zf:
+             for i, f in enumerate(all_files):
+                 if self._cancelled:
+                     break
+                 try:
+                     arcname = str(f.relative_to(self.sd_root)).replace("\\", "/")
+-                    zf.write(f, arcname)
++                    try:
++                        # Standard path — works for most files
++                        zf.write(f, arcname)
++                    except OSError as e:
++                        if e.errno == 22:
++                            # [Errno 22] Invalid argument — common on Windows when
++                            # zipfile.write() reads FAT32 files with incompatible
++                            # timestamps or metadata. Fall back to manual read.
++                            data = f.read_bytes()
++                            zi = zipfile.ZipInfo(arcname)
++                            zi.compress_type = zipfile.ZIP_DEFLATED
++                            zf.writestr(zi, data)
++                        else:
++                            raise
+                     file_count += 1
+                 except Exception as e:
+                     log.warning(f"backup skip {f}: {e}")
+diff --git a/app/core/xml_parser.py b/app/core/xml_parser.py
+index 458100e..9f1af47 100644
+--- a/app/core/xml_parser.py
++++ b/app/core/xml_parser.py
+@@ -301,12 +301,24 @@ def parse_synth(file_path: Path, sd_root: Path) -> Optional[Synth]:
+         osc2_type = "square"
+         filter_type = "lpf"
+ 
+-        # OSC types
+-        oscs = root.findall(".//osc")
+-        if len(oscs) >= 1:
+-            osc1_type = oscs[0].get("type", "square")
+-        if len(oscs) >= 2:
+-            osc2_type = oscs[1].get("type", "square")
++        # OSC types — Deluge uses <osc1> / <osc2>, not <osc>.
++        # New firmware (3.x+): type as attribute  → <osc1 type="saw" …>
++        # Old firmware (2.x):  type as child elem → <osc1><type>saw</type></osc1>
++        def _get_osc_type(osc_elem) -> str:
++            if osc_elem is None:
++                return "square"
++            # Attribute format (new firmware)
++            t = osc_elem.get("type", "").strip()
++            if t:
++                return t
++            # Child-element format (old firmware)
++            type_child = osc_elem.find("type")
++            if type_child is not None and (type_child.text or "").strip():
++                return type_child.text.strip()
++            return "square"
++
++        osc1_type = _get_osc_type(root.find(".//osc1"))
++        osc2_type = _get_osc_type(root.find(".//osc2"))
+ 
+         # Filter type
+         lpf = root.find(".//lpf")
+diff --git a/app/main_window.py b/app/main_window.py
+index 24741aa..3365d83 100644
+--- a/app/main_window.py
++++ b/app/main_window.py
+@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
+ from PySide6.QtCore import Qt, QEvent
+ 
+ from .theme import get_theme
++from .core.history import ActionHistory
+ from .core.sd_scanner import ScanWorker
+ from .modules.dashboard import DashboardModule
+ from .modules.lost_sample_finder import LostSampleFinderModule
+@@ -80,6 +81,11 @@ class MainWindow(QMainWindow):
+         self._scan_worker = None
+         self._nav_buttons: dict[str, NavButton] = {}
+         self._sidebar_collapsed = False
++        self._backup_banner_dismissed = False
++
++        # Global undo/redo history — shared across all modules
++        self._history = ActionHistory()
++        self._history.set_on_change(self._on_history_changed)
+ 
+         self._build_ui()
+         self._apply_theme(self._current_theme)
+@@ -114,6 +120,7 @@ class MainWindow(QMainWindow):
+         root.setSpacing(0)
+ 
+         root.addWidget(self._build_top_bar())
++        root.addWidget(self._build_backup_banner())  # hidden until first scan
+ 
+         body = QHBoxLayout()
+         body.setContentsMargins(0, 0, 0, 0)
+@@ -208,6 +215,22 @@ class MainWindow(QMainWindow):
+ 
+         layout.addStretch()
+ 
++        self._undo_btn = QPushButton("↩")
++        self._undo_btn.setObjectName("IconButton")
++        self._undo_btn.setFixedSize(36, 36)
++        self._undo_btn.setEnabled(False)
++        self._undo_btn.setToolTip("Rückgängig")
++        self._undo_btn.clicked.connect(self._do_undo)
++        layout.addWidget(self._undo_btn)
++
++        self._redo_btn = QPushButton("↪")
++        self._redo_btn.setObjectName("IconButton")
++        self._redo_btn.setFixedSize(36, 36)
++        self._redo_btn.setEnabled(False)
++        self._redo_btn.setToolTip("Wiederholen")
++        self._redo_btn.clicked.connect(self._do_redo)
++        layout.addWidget(self._redo_btn)
++
+         self._theme_btn = QPushButton("🌙")
+         self._theme_btn.setObjectName("IconButton")
+         self._theme_btn.setFixedSize(36, 36)
+@@ -359,6 +382,11 @@ class MainWindow(QMainWindow):
+ 
+         # Settings
+         settings_mod = reg("settings", SettingsModule(self._settings))
++
++        # Pass history to all modules that support undo/redo
++        for module in self._modules.values():
++            if hasattr(module, "set_history"):
++                module.set_history(self._history)
+         settings_mod.sd_path_changed.connect(self._on_sd_path_changed)
+         settings_mod.theme_changed.connect(self._apply_theme)
+         settings_mod.auto_scan_changed.connect(self._on_auto_scan_changed)
+@@ -448,6 +476,10 @@ class MainWindow(QMainWindow):
+             if hasattr(module, "update_index"):
+                 module.update_index(index)
+ 
++        # Show backup warning banner once per session
++        if not self._backup_banner_dismissed:
++            self._backup_banner.setVisible(True)
++
+         self._navigate("dashboard")
+ 
+     def _on_scan_error(self, msg: str):
+@@ -473,6 +505,70 @@ class MainWindow(QMainWindow):
+         self._theme_btn.setText("☀️" if theme == "dark" else "🌙")
+         self._save_settings()
+ 
++    # ── Backup Banner ──────────────────────────────────────────────────────
++    def _build_backup_banner(self) -> QWidget:
++        from PySide6.QtWidgets import QHBoxLayout
++        bar = QWidget()
++        bar.setObjectName("BackupBanner")
++        layout = QHBoxLayout(bar)
++        layout.setContentsMargins(12, 0, 12, 0)
++        layout.setSpacing(8)
++
++        icon = QLabel("⚠")
++        icon.setObjectName("BackupBannerText")
++        layout.addWidget(icon)
++
++        txt = QLabel("Empfehlung: Erstelle ein Backup bevor du Änderungen vornimmst.")
++        txt.setObjectName("BackupBannerText")
++        layout.addWidget(txt, 1)
++
++        go_btn = QPushButton("💾  Backup & Sync →")
++        go_btn.setObjectName("BackupBannerBtn")
++        go_btn.setFixedHeight(26)
++        go_btn.clicked.connect(lambda: (self._navigate("backup_sync"), self._dismiss_backup_banner()))
++        layout.addWidget(go_btn)
++
++        dismiss_btn = QPushButton("✕")
++        dismiss_btn.setObjectName("BackupBannerDismiss")
++        dismiss_btn.setFixedSize(26, 26)
++        dismiss_btn.setToolTip("Hinweis ausblenden")
++        dismiss_btn.clicked.connect(self._dismiss_backup_banner)
++        layout.addWidget(dismiss_btn)
++
++        self._backup_banner = bar
++        bar.setVisible(False)
++        return bar
++
++    def _dismiss_backup_banner(self):
++        self._backup_banner_dismissed = True
++        self._backup_banner.setVisible(False)
++
++    # ── Undo / Redo ────────────────────────────────────────────────────────
++    def _on_history_changed(self, can_undo: bool, can_redo: bool,
++                             undo_desc: str, redo_desc: str):
++        self._undo_btn.setEnabled(can_undo)
++        self._redo_btn.setEnabled(can_redo)
++        self._undo_btn.setToolTip(f"Rückgängig: {undo_desc}" if undo_desc else "Rückgängig")
++        self._redo_btn.setToolTip(f"Wiederholen: {redo_desc}" if redo_desc else "Wiederholen")
++
++    def _do_undo(self):
++        try:
++            desc = self._history.undo()
++            if desc:
++                self._status_label.setText(f"↩  Rückgängig: {desc}")
++                self._trigger_scan()
++        except Exception as e:
++            QMessageBox.warning(self, "Undo fehlgeschlagen", str(e))
++
++    def _do_redo(self):
++        try:
++            desc = self._history.redo()
++            if desc:
++                self._status_label.setText(f"↪  Wiederholt: {desc}")
++                self._trigger_scan()
++        except Exception as e:
++            QMessageBox.warning(self, "Redo fehlgeschlagen", str(e))
++
+     # ── Cleanup ────────────────────────────────────────────────────────────
+     def closeEvent(self, event):
+         self._save_settings()
+diff --git a/app/modules/lost_sample_finder.py b/app/modules/lost_sample_finder.py
+index caca4e0..8bcb928 100644
+--- a/app/modules/lost_sample_finder.py
++++ b/app/modules/lost_sample_finder.py
+@@ -98,6 +98,7 @@ class LostSampleFinderModule(QWidget):
+         self._index: Optional[SDCardIndex] = None
+         self._refs: list[MissingRef] = []
+         self._worker = None
++        self._history = None
+         self._build_ui()
+ 
+     def _build_ui(self):
+@@ -230,6 +231,10 @@ class LostSampleFinderModule(QWidget):
+         return l
+ 
+     # ── Public API ─────────────────────────────────────────────────────────
++    def set_history(self, history):
++        """Register the ActionHistory for undo/redo."""
++        self._history = history
++
+     def update_index(self, index: SDCardIndex):
+         self._index = index
+         self._run_analysis()
+@@ -439,12 +444,26 @@ class LostSampleFinderModule(QWidget):
+         if not ref or not ref.resolution or ref.fixed:
+             return
+         try:
++            from ..core.file_ops import _read_xml, _write_xml
++            from ..core.history import Action
++
++            text_before, enc = _read_xml(ref.xml_file)
++
+             sd_root = _guess_sd_root(ref.xml_file)
+             new_rel = str(ref.resolution.relative_to(sd_root)).replace("\\", "/")
+             if update_xml_path(ref.xml_file, ref.broken_path, new_rel):
+                 ref.fixed = True
+                 self._refresh_row(row)
+                 self._stats_label.setText(f"✅  Fix angewendet: {ref.filename}")
++
++                if self._history:
++                    _path, _enc, _before = ref.xml_file, enc, text_before
++                    text_after, _ = _read_xml(ref.xml_file)
++                    self._history.push(Action(
++                        description=f"Sample-Pfad repariert: {ref.filename}",
++                        undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
++                        redo_fn=lambda p=_path, t=text_after, e=_enc: _write_xml(p, t, e),
++                    ))
+             else:
+                 self._stats_label.setText(f"⚠  Fix fehlgeschlagen für: {ref.filename}")
+         except Exception as e:
+@@ -475,6 +494,21 @@ class LostSampleFinderModule(QWidget):
+         self._apply_btn.setEnabled(False)
+         self._progress.setVisible(True)
+ 
++        # Capture original XML content of all affected files for undo
++        if self._history:
++            from ..core.file_ops import _read_xml, _write_xml
++            from ..core.history import Action
++            _snapshots = {}
++            for _r in ready:
++                if _r.xml_file not in _snapshots:
++                    try:
++                        _t, _e = _read_xml(_r.xml_file)
++                        _snapshots[_r.xml_file] = (_t, _e)
++                    except Exception:
++                        pass
++            # Store on self for use in _on_apply_done
++            self._pending_history_snapshots = _snapshots
++
+         self._fix_worker = ApplyFixWorker(ready)
+         self._fix_worker.progress.connect(lambda p, m: (
+             self._progress.setValue(p),
+@@ -492,6 +526,32 @@ class LostSampleFinderModule(QWidget):
+             + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
+         )
+         self._update_apply_button()
++
++        if self._history and hasattr(self, '_pending_history_snapshots'):
++            from ..core.file_ops import _read_xml, _write_xml
++            from ..core.history import Action
++            snaps = self._pending_history_snapshots
++            afters = {}
++            for path in snaps:
++                try:
++                    t, e = _read_xml(path)
++                    afters[path] = (t, e)
++                except Exception:
++                    pass
++            count = sum(1 for r in self._refs if r.fixed)
++            def _undo_all(s=snaps):
++                for p, (t, e) in s.items():
++                    _write_xml(p, t, e)
++            def _redo_all(a=afters):
++                for p, (t, e) in a.items():
++                    _write_xml(p, t, e)
++            self._history.push(Action(
++                description=f"{count} Sample-Pfade repariert",
++                undo_fn=_undo_all,
++                redo_fn=_redo_all,
++            ))
++            del self._pending_history_snapshots
++
+         QMessageBox.information(
+             self, "Fertig",
+             f"Reparatur abgeschlossen:\n"
+diff --git a/app/modules/sample_manager.py b/app/modules/sample_manager.py
+index 9ffcc53..f7ab3cf 100644
+--- a/app/modules/sample_manager.py
++++ b/app/modules/sample_manager.py
+@@ -212,6 +212,7 @@ class SampleManagerModule(QWidget):
+         self._index: Optional[SDCardIndex] = None
+         self._player = AudioPlayer()
+         self._current_sample: Optional[Sample] = None
++        self._history = None
+         self._build_ui()
+ 
+     def _build_ui(self):
+@@ -385,6 +386,10 @@ class SampleManagerModule(QWidget):
+         return l
+ 
+     # ── Public API ─────────────────────────────────────────────────────────
++    def set_history(self, history):
++        """Register the ActionHistory for undo/redo."""
++        self._history = history
++
+     def update_index(self, index: SDCardIndex):
+         self._index = index
+         self._populate_tree()
+@@ -557,6 +562,19 @@ class SampleManagerModule(QWidget):
+         if new_abs:
+             self._status.setText(f"✅  Umbenannt → {new_name}  |  {len(updated)} XMLs aktualisiert")
+             self.request_rescan.emit()
++            if self._history:
++                from ..core.history import Action
++                from ..core.file_ops import rename_sample as _rename_sample
++                _old_path = s.file_path
++                _new_abs = new_abs
++                _old_name = s.name
++                _new_name = new_name.strip()
++                _root = self._index.root_path
++                self._history.push(Action(
++                    description=f"Sample umbenannt: {_old_name} → {_new_name}",
++                    undo_fn=lambda op=_old_path, nn=_old_name, r=_root, na=_new_abs: _rename_sample(na, nn, r),
++                    redo_fn=lambda op=_old_path, nn=_new_name, r=_root: _rename_sample(op, nn, r),
++                ))
+         else:
+             QMessageBox.warning(self, "Fehler", f"Umbenennen fehlgeschlagen.")
+ 
+@@ -575,6 +593,19 @@ class SampleManagerModule(QWidget):
+         if new_abs:
+             self._status.setText(f"✅  Verschoben nach {Path(folder).name}  |  {len(updated)} XMLs aktualisiert")
+             self.request_rescan.emit()
++            if self._history:
++                from ..core.history import Action
++                from ..core.file_ops import move_sample as _move_sample
++                _old_path = s.file_path
++                _new_abs = new_abs
++                _old_folder = s.file_path.parent
++                _new_folder = Path(folder)
++                _root = self._index.root_path
++                self._history.push(Action(
++                    description=f"Sample verschoben: {s.name}",
++                    undo_fn=lambda na=_new_abs, of=_old_folder, r=_root: _move_sample(na, of, r),
++                    redo_fn=lambda op=_old_path, nf=_new_folder, r=_root: _move_sample(op, nf, r),
++                ))
+         else:
+             QMessageBox.warning(self, "Fehler", "Verschieben fehlgeschlagen.")
+ 
+@@ -600,11 +631,21 @@ class SampleManagerModule(QWidget):
+             if reply != QMessageBox.Yes:
+                 return
+ 
+-        if delete_sample(s.file_path):
++        try:
++            from ..core.history import move_to_trash, restore_from_trash, Action
++            original_path = s.file_path
++            state = [move_to_trash(original_path)]
+             self._status.setText(f"🗑  Gelöscht: {s.name}")
+             self.request_rescan.emit()
+-        else:
+-            QMessageBox.warning(self, "Fehler", "Löschen fehlgeschlagen.")
++            if self._history:
++                _op = original_path
++                self._history.push(Action(
++                    description=f"Sample gelöscht: {s.name}",
++                    undo_fn=lambda st=state, op=_op: restore_from_trash(st[0], op),
++                    redo_fn=lambda st=state, op=_op: st.__setitem__(0, move_to_trash(op)),
++                ))
++        except Exception as e:
++            QMessageBox.warning(self, "Fehler", f"Löschen fehlgeschlagen: {e}")
+ 
+     # ── Batch import ───────────────────────────────────────────────────────
+     def _batch_import(self):
+diff --git a/app/modules/synth_editor.py b/app/modules/synth_editor.py
+index cfce326..416d425 100644
+--- a/app/modules/synth_editor.py
++++ b/app/modules/synth_editor.py
+@@ -84,6 +84,7 @@ class SynthEditorModule(QWidget):
+         self._synths: list[Synth] = []
+         self._current_synth: Optional[Synth] = None
+         self._param_sliders: dict[str, ParamSlider] = {}
++        self._history = None
+         self._build_ui()
+ 
+     def _build_ui(self):
+@@ -316,6 +317,10 @@ class SynthEditorModule(QWidget):
+         return l
+ 
+     # ── Public API ─────────────────────────────────────────────────────────
++    def set_history(self, history):
++        """Register the ActionHistory for undo/redo."""
++        self._history = history
++
+     def update_index(self, index: SDCardIndex):
+         self._index = index
+         self._synths = index.synths
+@@ -509,6 +514,7 @@ class SynthEditorModule(QWidget):
+             # Pass 2: targeted text replacement — preserves file structure
+             # and encoding completely.
+             text, enc = _read_xml(self._current_synth.file_path)
++            text_before = text
+             for old_hex, new_hex in replacements:
+                 # Replace only the first occurrence to avoid accidentally
+                 # touching unrelated elements that share the same value.
+@@ -517,6 +523,15 @@ class SynthEditorModule(QWidget):
+             _write_xml(self._current_synth.file_path, text, enc)
+             self._status.setText(f"✅  Gespeichert: {self._current_synth.name}")
+ 
++            if self._history:
++                from ..core.history import Action
++                _path, _enc, _before, _after = self._current_synth.file_path, enc, text_before, text
++                self._history.push(Action(
++                    description=f"Synth bearbeitet: {self._current_synth.name}",
++                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
++                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
++                ))
++
+         except Exception as e:
+             QMessageBox.warning(self, "Fehler", f"Speichern fehlgeschlagen: {e}")
+ 
+@@ -562,6 +577,14 @@ class SynthEditorModule(QWidget):
+             _write_xml(new_path, text, enc)
+             self._status.setText(f"✅  Zufälliger Synth erstellt: {new_name}")
+             self.request_rescan.emit()
++            if self._history:
++                from ..core.history import Action
++                _p = new_path
++                self._history.push(Action(
++                    description=f"Synth randomisiert: {new_name.strip()}",
++                    undo_fn=lambda p=_p: p.unlink() if p.exists() else None,
++                    redo_fn=None,  # no redo for randomize (result would be different)
++                ))
+         except Exception as e:
+             QMessageBox.warning(self, "Fehler", str(e))
+ 
+@@ -580,6 +603,14 @@ class SynthEditorModule(QWidget):
+             synth.file_path.rename(new_path)
+             self._status.setText(f"✅  Umbenannt → {new_name}")
+             self.request_rescan.emit()
++            if self._history:
++                from ..core.history import Action
++                _old, _new = synth.file_path, new_path
++                self._history.push(Action(
++                    description=f"Synth umbenannt: {synth.name} → {new_name.strip()}",
++                    undo_fn=lambda o=_old, n=_new: n.rename(o),
++                    redo_fn=lambda o=_old, n=_new: o.rename(n),
++                ))
+         except Exception as e:
+             QMessageBox.warning(self, "Fehler", str(e))
+ 
+@@ -609,9 +640,18 @@ class SynthEditorModule(QWidget):
+         if reply != QMessageBox.Yes:
+             return
+         try:
+-            synth.file_path.unlink()
++            from ..core.history import move_to_trash, restore_from_trash, Action
++            original_path = synth.file_path
++            state = [move_to_trash(original_path)]
+             self._status.setText(f"🗑  Gelöscht: {synth.name}")
+             self.request_rescan.emit()
++            if self._history:
++                _op = original_path
++                self._history.push(Action(
++                    description=f"Synth gelöscht: {synth.name}",
++                    undo_fn=lambda s=state, op=_op: restore_from_trash(s[0], op),
++                    redo_fn=lambda s=state, op=_op: s.__setitem__(0, move_to_trash(op)),
++                ))
+         except Exception as e:
+             QMessageBox.warning(self, "Fehler", str(e))
+ 
+diff --git a/app/theme.py b/app/theme.py
+index 9ee92ce..5c1dd9f 100644
+--- a/app/theme.py
++++ b/app/theme.py
+@@ -72,6 +72,26 @@ QPushButton#CollapseButton:hover { background-color: #0F3460; color: #AAAAAA; }
+ }
+ #StatusLabel { color: #AAAAAA; font-size: 11px; padding: 0 12px; }
+ 
++/* === Backup Warning Banner === */
++#BackupBanner {
++    background-color: #3A2800;
++    border-bottom: 1px solid #C87800;
++    min-height: 36px; max-height: 36px;
++}
++#BackupBannerText { color: #FFB733; font-size: 12px; padding: 0 12px; }
++QPushButton#BackupBannerBtn {
++    background-color: #C87800; color: #FFFFFF;
++    border: none; border-radius: 4px;
++    padding: 4px 12px; font-size: 12px; font-weight: bold;
++}
++QPushButton#BackupBannerBtn:hover { background-color: #E08800; }
++QPushButton#BackupBannerDismiss {
++    background-color: transparent; color: #C87800;
++    border: 1px solid #C87800; border-radius: 4px;
++    padding: 2px 8px; font-size: 12px;
++}
++QPushButton#BackupBannerDismiss:hover { background-color: #4A3400; }
++
+ /* === Scan Overlay === */
+ #ScanOverlay { background-color: rgba(26, 26, 46, 210); }
+ #ScanOverlayCard { background-color: #16213E; border: 1px solid #1E6FBB; border-radius: 12px; }
+@@ -262,6 +282,26 @@ QPushButton#CollapseButton:hover { background-color: #EAF2FB; color: #1E6FBB; }
+ #StatusBar { background-color: #EAF2FB; min-height: 28px; max-height: 28px; border-top: 1px solid #BBCCEE; }
+ #StatusLabel { color: #888888; font-size: 11px; padding: 0 12px; }
+ 
++/* === Backup Warning Banner === */
++#BackupBanner {
++    background-color: #FFF3CD;
++    border-bottom: 1px solid #E8A000;
++    min-height: 36px; max-height: 36px;
++}
++#BackupBannerText { color: #856404; font-size: 12px; padding: 0 12px; }
++QPushButton#BackupBannerBtn {
++    background-color: #E8A000; color: #FFFFFF;
++    border: none; border-radius: 4px;
++    padding: 4px 12px; font-size: 12px; font-weight: bold;
++}
++QPushButton#BackupBannerBtn:hover { background-color: #D08000; }
++QPushButton#BackupBannerDismiss {
++    background-color: transparent; color: #856404;
++    border: 1px solid #E8A000; border-radius: 4px;
++    padding: 2px 8px; font-size: 12px;
++}
++QPushButton#BackupBannerDismiss:hover { background-color: #FFE8A0; }
++
+ /* === Scan Overlay === */
+ #ScanOverlay { background-color: rgba(245, 247, 250, 210); }
+ #ScanOverlayCard { background-color: #FFFFFF; border: 1px solid #1E6FBB; border-radius: 12px; }
+diff --git a/requirements.txt b/requirements.txt
+index 7132b1e..7ac2fd0 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,5 +1,6 @@
+ PySide6>=6.6.0
+ lxml>=5.0.0
+ # Optional for audio preview:
+-# sounddevice>=0.4.6
+-# numpy>=1.24.0
++sounddevice>=0.4.6
++numpy>=1.24.0
++soundfile>=0.12.0

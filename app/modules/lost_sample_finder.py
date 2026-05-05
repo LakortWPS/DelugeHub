@@ -98,6 +98,7 @@ class LostSampleFinderModule(QWidget):
         self._index: Optional[SDCardIndex] = None
         self._refs: list[MissingRef] = []
         self._worker = None
+        self._history = None
         self._build_ui()
 
     def _build_ui(self):
@@ -230,6 +231,10 @@ class LostSampleFinderModule(QWidget):
         return l
 
     # ── Public API ─────────────────────────────────────────────────────────
+    def set_history(self, history):
+        """Register the ActionHistory for undo/redo."""
+        self._history = history
+
     def update_index(self, index: SDCardIndex):
         self._index = index
         self._run_analysis()
@@ -439,12 +444,26 @@ class LostSampleFinderModule(QWidget):
         if not ref or not ref.resolution or ref.fixed:
             return
         try:
+            from ..core.file_ops import _read_xml, _write_xml
+            from ..core.history import Action
+
+            text_before, enc = _read_xml(ref.xml_file)
+
             sd_root = _guess_sd_root(ref.xml_file)
             new_rel = str(ref.resolution.relative_to(sd_root)).replace("\\", "/")
             if update_xml_path(ref.xml_file, ref.broken_path, new_rel):
                 ref.fixed = True
                 self._refresh_row(row)
                 self._stats_label.setText(f"✅  Fix angewendet: {ref.filename}")
+
+                if self._history:
+                    _path, _enc, _before = ref.xml_file, enc, text_before
+                    text_after, _ = _read_xml(ref.xml_file)
+                    self._history.push(Action(
+                        description=f"Sample-Pfad repariert: {ref.filename}",
+                        undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
+                        redo_fn=lambda p=_path, t=text_after, e=_enc: _write_xml(p, t, e),
+                    ))
             else:
                 self._stats_label.setText(f"⚠  Fix fehlgeschlagen für: {ref.filename}")
         except Exception as e:
@@ -475,6 +494,21 @@ class LostSampleFinderModule(QWidget):
         self._apply_btn.setEnabled(False)
         self._progress.setVisible(True)
 
+        # Capture original XML content of all affected files for undo
+        if self._history:
+            from ..core.file_ops import _read_xml, _write_xml
+            from ..core.history import Action
+            _snapshots = {}
+            for _r in ready:
+                if _r.xml_file not in _snapshots:
+                    try:
+                        _t, _e = _read_xml(_r.xml_file)
+                        _snapshots[_r.xml_file] = (_t, _e)
+                    except Exception:
+                        pass
+            # Store on self for use in _on_apply_done
+            self._pending_history_snapshots = _snapshots
+
         self._fix_worker = ApplyFixWorker(ready)
         self._fix_worker.progress.connect(lambda p, m: (
             self._progress.setValue(p),
@@ -492,6 +526,32 @@ class LostSampleFinderModule(QWidget):
             + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
         )
         self._update_apply_button()
+
+        if self._history and hasattr(self, '_pending_history_snapshots'):
+            from ..core.file_ops import _read_xml, _write_xml
+            from ..core.history import Action
+            snaps = self._pending_history_snapshots
+            afters = {}
+            for path in snaps:
+                try:
+                    t, e = _read_xml(path)
+                    afters[path] = (t, e)
+                except Exception:
+                    pass
+            count = sum(1 for r in self._refs if r.fixed)
+            def _undo_all(s=snaps):
+                for p, (t, e) in s.items():
+                    _write_xml(p, t, e)
+            def _redo_all(a=afters):
+                for p, (t, e) in a.items():
+                    _write_xml(p, t, e)
+            self._history.push(Action(
+                description=f"{count} Sample-Pfade repariert",
+                undo_fn=_undo_all,
+                redo_fn=_redo_all,
+            ))
+            del self._pending_history_snapshots
+
         QMessageBox.information(
             self, "Fertig",
             f"Reparatur abgeschlossen:\n"

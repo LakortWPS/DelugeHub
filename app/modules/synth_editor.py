@@ -84,6 +84,7 @@ class SynthEditorModule(QWidget):
         self._synths: list[Synth] = []
         self._current_synth: Optional[Synth] = None
         self._param_sliders: dict[str, ParamSlider] = {}
+        self._history = None
         self._build_ui()
 
     def _build_ui(self):
@@ -316,6 +317,10 @@ class SynthEditorModule(QWidget):
         return l
 
     # ── Public API ─────────────────────────────────────────────────────────
+    def set_history(self, history):
+        """Register the ActionHistory for undo/redo."""
+        self._history = history
+
     def update_index(self, index: SDCardIndex):
         self._index = index
         self._synths = index.synths
@@ -509,6 +514,7 @@ class SynthEditorModule(QWidget):
             # Pass 2: targeted text replacement — preserves file structure
             # and encoding completely.
             text, enc = _read_xml(self._current_synth.file_path)
+            text_before = text
             for old_hex, new_hex in replacements:
                 # Replace only the first occurrence to avoid accidentally
                 # touching unrelated elements that share the same value.
@@ -516,6 +522,15 @@ class SynthEditorModule(QWidget):
 
             _write_xml(self._current_synth.file_path, text, enc)
             self._status.setText(f"✅  Gespeichert: {self._current_synth.name}")
+
+            if self._history:
+                from ..core.history import Action
+                _path, _enc, _before, _after = self._current_synth.file_path, enc, text_before, text
+                self._history.push(Action(
+                    description=f"Synth bearbeitet: {self._current_synth.name}",
+                    undo_fn=lambda p=_path, t=_before, e=_enc: _write_xml(p, t, e),
+                    redo_fn=lambda p=_path, t=_after, e=_enc: _write_xml(p, t, e),
+                ))
 
         except Exception as e:
             QMessageBox.warning(self, "Fehler", f"Speichern fehlgeschlagen: {e}")
@@ -562,6 +577,14 @@ class SynthEditorModule(QWidget):
             _write_xml(new_path, text, enc)
             self._status.setText(f"✅  Zufälliger Synth erstellt: {new_name}")
             self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _p = new_path
+                self._history.push(Action(
+                    description=f"Synth randomisiert: {new_name.strip()}",
+                    undo_fn=lambda p=_p: p.unlink() if p.exists() else None,
+                    redo_fn=None,  # no redo for randomize (result would be different)
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
@@ -580,6 +603,14 @@ class SynthEditorModule(QWidget):
             synth.file_path.rename(new_path)
             self._status.setText(f"✅  Umbenannt → {new_name}")
             self.request_rescan.emit()
+            if self._history:
+                from ..core.history import Action
+                _old, _new = synth.file_path, new_path
+                self._history.push(Action(
+                    description=f"Synth umbenannt: {synth.name} → {new_name.strip()}",
+                    undo_fn=lambda o=_old, n=_new: n.rename(o),
+                    redo_fn=lambda o=_old, n=_new: o.rename(n),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
@@ -609,9 +640,18 @@ class SynthEditorModule(QWidget):
         if reply != QMessageBox.Yes:
             return
         try:
-            synth.file_path.unlink()
+            from ..core.history import move_to_trash, restore_from_trash, Action
+            original_path = synth.file_path
+            state = [move_to_trash(original_path)]
             self._status.setText(f"🗑  Gelöscht: {synth.name}")
             self.request_rescan.emit()
+            if self._history:
+                _op = original_path
+                self._history.push(Action(
+                    description=f"Synth gelöscht: {synth.name}",
+                    undo_fn=lambda s=state, op=_op: restore_from_trash(s[0], op),
+                    redo_fn=lambda s=state, op=_op: s.__setitem__(0, move_to_trash(op)),
+                ))
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 

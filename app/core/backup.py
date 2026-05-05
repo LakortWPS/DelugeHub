@@ -169,13 +169,26 @@ class BackupWorker(QThread):
 
         file_count = 0
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED,
-                             compresslevel=6) as zf:
+                             compresslevel=6, allowZip64=True) as zf:
             for i, f in enumerate(all_files):
                 if self._cancelled:
                     break
                 try:
                     arcname = str(f.relative_to(self.sd_root)).replace("\\", "/")
-                    zf.write(f, arcname)
+                    try:
+                        # Standard path — works for most files
+                        zf.write(f, arcname)
+                    except OSError as e:
+                        if e.errno == 22:
+                            # [Errno 22] Invalid argument — common on Windows when
+                            # zipfile.write() reads FAT32 files with incompatible
+                            # timestamps or metadata. Fall back to manual read.
+                            data = f.read_bytes()
+                            zi = zipfile.ZipInfo(arcname)
+                            zi.compress_type = zipfile.ZIP_DEFLATED
+                            zf.writestr(zi, data)
+                        else:
+                            raise
                     file_count += 1
                 except Exception as e:
                     log.warning(f"backup skip {f}: {e}")
