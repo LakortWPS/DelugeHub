@@ -132,12 +132,14 @@ class BackupWorker(QThread):
     finished = Signal(Path)
     error = Signal(str)
 
-    def __init__(self, sd_root: Path, backup_dir: Path, label: str, notes: str = ""):
+    def __init__(self, sd_root: Path, backup_dir: Path, label: str, notes: str = "",
+                 exclude_samples: bool = False):
         super().__init__()
         self.sd_root = sd_root
         self.backup_dir = backup_dir
         self.label = label
         self.notes = notes
+        self.exclude_samples = exclude_samples
         self._cancelled = False
 
     def cancel(self):
@@ -159,53 +161,68 @@ class BackupWorker(QThread):
         zip_path = self.backup_dir / filename
 
         # Collect all files to backup
+        samples_folder = (self.sd_root / "SAMPLES").resolve()
         all_files = []
         for f in self.sd_root.rglob("*"):
-            if f.is_file() and f.name not in IGNORE_PATTERNS:
-                all_files.append(f)
+            if not f.is_file() or f.name in IGNORE_PATTERNS:
+                continue
+            if self.exclude_samples:
+                try:
+                    f.resolve().relative_to(samples_folder)
+                    continue  # liegt im SAMPLES-Ordner → überspringen
+                except ValueError:
+                    pass
+            all_files.append(f)
 
         total = len(all_files)
         self.progress.emit(0, f"Starte Backup ({total} Dateien)…")
 
         file_count = 0
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED,
-                             compresslevel=6, allowZip64=True) as zf:
-            for i, f in enumerate(all_files):
-                if self._cancelled:
-                    break
-                try:
-                    arcname = str(f.relative_to(self.sd_root)).replace("\\", "/")
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED,
+                                 compresslevel=6, allowZip64=True) as zf:
+                for i, f in enumerate(all_files):
+                    if self._cancelled:
+                        break
                     try:
-                        # Standard path — works for most files
-                        zf.write(f, arcname)
-                    except OSError as e:
-                        if e.errno == 22:
-                            # [Errno 22] Invalid argument — common on Windows when
-                            # zipfile.write() reads FAT32 files with incompatible
-                            # timestamps or metadata. Fall back to manual read.
-                            data = f.read_bytes()
-                            zi = zipfile.ZipInfo(arcname)
-                            zi.compress_type = zipfile.ZIP_DEFLATED
-                            zf.writestr(zi, data)
-                        else:
-                            raise
-                    file_count += 1
-                except Exception as e:
-                    log.warning(f"backup skip {f}: {e}")
+                        arcname = str(f.relative_to(self.sd_root)).replace("\\", "/")
+                        try:
+                            # Standard path — works for most files
+                            zf.write(f, arcname)
+                        except OSError as e:
+                            if e.errno == 22:
+                                # [Errno 22] Invalid argument — common on Windows when
+                                # zipfile.write() reads FAT32 files with incompatible
+                                # timestamps or metadata. Fall back to manual read.
+                                data = f.read_bytes()
+                                zi = zipfile.ZipInfo(arcname)
+                                zi.compress_type = zipfile.ZIP_DEFLATED
+                                zf.writestr(zi, data)
+                            else:
+                                raise
+                        file_count += 1
+                    except Exception as e:
+                        log.warning(f"backup skip {f}: {e}")
 
-                pct = int((i + 1) / max(total, 1) * 95)
-                self.progress.emit(pct, f"Backup: {f.name}")
+                    pct = int((i + 1) / max(total, 1) * 95)
+                    self.progress.emit(pct, f"Backup: {f.name}")
 
-            # Write metadata
-            meta = {
-                "timestamp": ts.isoformat(),
-                "label": self.label,
-                "sd_root": str(self.sd_root),
-                "file_count": file_count,
-                "notes": self.notes,
-                "version": "1.0",
-            }
-            zf.writestr(BACKUP_META_FILE, json.dumps(meta, indent=2))
+                # Write metadata
+                meta = {
+                    "timestamp": ts.isoformat(),
+                    "label": self.label,
+                    "sd_root": str(self.sd_root),
+                    "file_count": file_count,
+                    "notes": self.notes,
+                    "version": "1.0",
+                }
+                zf.writestr(BACKUP_META_FILE, json.dumps(meta, indent=2))
+        except Exception:
+            zip_path.unlink(missing_ok=True)  # Aufräumen bei Fehler
+            raise
+
+        if self._cancelled:
+            zip_path.unlink(missing_ok=True)  # Aufräumen bei Abbruch
 
         self.progress.emit(100, "Backup abgeschlossen.")
         return zip_path

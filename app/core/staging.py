@@ -153,19 +153,37 @@ class StagingStore:
     def _resolve_target(self, original: Path, dest_root: Optional[Path]) -> Path:
         if dest_root is None or self._sd_root is None:
             return original
-        rel = original.relative_to(self._sd_root)
+        try:
+            rel = original.relative_to(self._sd_root)
+        except ValueError:
+            raise ValueError(
+                f"Pfad {original!r} liegt nicht unter SD-Root {self._sd_root!r}"
+            )
         return dest_root / rel
 
     # ── Persistenz ─────────────────────────────────────────────────────────
     def _autosave(self) -> None:
         if self._sd_root:
-            self.save_to_disk(self._sd_root)
+            try:
+                self.save_to_disk(self._sd_root)
+            except OSError as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Autosave fehlgeschlagen (%s): %s", self._sd_root, e
+                )
 
     def save_to_disk(self, sd_root: Path) -> None:
         data = [c.to_dict() for c in self._changes.values()]
-        (sd_root / PENDING_FILE).write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        target = sd_root / PENDING_FILE
+        tmp = target.with_suffix(".tmp")
+        try:
+            tmp.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            tmp.replace(target)  # atomar auf POSIX/Windows
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def load_from_disk(self, sd_root: Path) -> bool:
         """Lädt gespeicherte Änderungen. Gibt True zurück wenn Änderungen gefunden."""

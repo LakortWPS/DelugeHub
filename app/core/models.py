@@ -125,12 +125,13 @@ class SDCardIndex:
         for k in self.kits:
             if k.has_missing_samples:
                 result.append(k)
+        for sy in self.synths:
+            if sy.missing_samples:
+                result.append(sy)
         return result
 
     @property
     def unused_samples(self) -> list[Sample]:
         return [s for s in self.samples if not s.is_used]
 
-    @property
-    def total_sample_size_mb(self) -> float:
-        return sum(s.size_mb for s in self.samples)
+    @proper

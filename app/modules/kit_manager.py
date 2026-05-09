@@ -18,6 +18,7 @@ from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Kit
 from ..core.staging import StagingStore, PendingChange, ChangeType
+from ..core.volume_utils import vol_to_display, display_to_vol, vol_to_amp, amp_to_vol
 
 
 class PadWidget(QFrame):
@@ -577,17 +578,6 @@ class KitManagerModule(QWidget):
             )
             return
 
-        def vol_to_amp(hex_str: str) -> float:
-            v = int(hex_str, 16)
-            if v >= 0x80000000:
-                v -= 0x100000000
-            return (v + 2_147_483_648) / 4_294_967_295
-
-        def amp_to_vol(amp: float) -> str:
-            amp = max(0.0, min(1.0, amp))
-            v = int(amp * 4_294_967_295) - 2_147_483_648
-            return f"0x{v & 0xFFFFFFFF:08X}"
-
         target_rms = max(p["rms"] for p in valid_pads)
         for pad in valid_pads:
             gain = target_rms / pad["rms"]
@@ -604,19 +594,22 @@ class KitManagerModule(QWidget):
 
         sources_block = sources_match.group(1)
         changed = 0
+        search_pos = 0
         for pad in valid_pads:
-            if pad["new_vol"] and pad["new_vol"] != pad["current_vol"]:
-                if pad["vol_format"] == "attr":
-                    old_tag = f'volume="{pad["current_vol"]}"'
-                    new_tag = f'volume="{pad["new_vol"]}"'
-                else:
-                    old_tag = f'<volume>{pad["current_vol"]}</volume>'
-                    new_tag = f'<volume>{pad["new_vol"]}</volume>'
+            if not (pad["new_vol"] and pad["new_vol"] != pad["current_vol"]):
+                continue
+            if pad["vol_format"] == "attr":
+                old_tag = f'volume="{pad["current_vol"]}"'
+                new_tag = f'volume="{pad["new_vol"]}"'
+            else:
+                old_tag = f'<volume>{pad["current_vol"]}</volume>'
+                new_tag = f'<volume>{pad["new_vol"]}</volume>'
 
-                new_block = sources_block.replace(old_tag, new_tag, 1)
-                if new_block != sources_block:
-                    sources_block = new_block
-                    changed += 1
+            idx = sources_block.find(old_tag, search_pos)
+            if idx != -1:
+                sources_block = sources_block[:idx] + new_tag + sources_block[idx + len(old_tag):]
+                search_pos = idx + len(new_tag)
+                changed += 1
 
         if changed == 0:
             self._status.setText("ℹ  Keine Änderungen nötig — alle Pads bereits auf gleicher Lautstärke.")
@@ -666,22 +659,9 @@ class KitManagerModule(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
-    # ── Volume-Cap Helpers ─────────────────────────────────────────────────
-
-    @staticmethod
-    def _vol_to_display(hex_str: str) -> float:
-        """Deluge hex volume string → display value 0–50."""
-        v = int(hex_str, 16)
-        if v >= 0x80000000:
-            v -= 0x100000000           # unsigned → signed
-        return ((v + 2_147_483_648) / 4_294_967_295) * 50
-
-    @staticmethod
-    def _display_to_vol(display: float) -> str:
-        """Display value 0–50 → Deluge hex volume string."""
-        amp = max(0.0, min(1.0, display / 50.0))
-        v = int(amp * 4_294_967_295) - 2_147_483_648
-        return f"0x{v & 0xFFFFFFFF:08X}"
+    # ── Volume-Cap Helpers (delegiert an core.volume_utils) ───────────────
+    _vol_to_display = staticmethod(vol_to_display)
+    _display_to_vol = staticmethod(display_to_vol)
 
     def _cap_kit_master(self):
         kit = self._selected_kit()
@@ -860,3 +840,4 @@ class KitManagerModule(QWidget):
                 self.request_rescan.emit()
             except Exception as e:
                 QMessageBox.warning(self, "Fehler", str(e))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       

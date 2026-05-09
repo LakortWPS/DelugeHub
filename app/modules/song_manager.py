@@ -19,6 +19,7 @@ from PySide6.QtGui import QColor
 from ..core.models import SDCardIndex, Song
 from ..core.file_ops import update_xml_path
 from ..core.staging import StagingStore, PendingChange, ChangeType
+from ..core.volume_utils import vol_to_display, display_to_vol
 
 
 COL_NAME = 0
@@ -406,22 +407,9 @@ class SongManagerModule(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Export-Fehler", str(e))
 
-    # ── Volume-Cap Helpers ─────────────────────────────────────────────────
-
-    @staticmethod
-    def _vol_to_display(hex_str: str) -> float:
-        """Deluge hex volume string → display value 0–50."""
-        v = int(hex_str, 16)
-        if v >= 0x80000000:
-            v -= 0x100000000           # unsigned → signed
-        return ((v + 2_147_483_648) / 4_294_967_295) * 50
-
-    @staticmethod
-    def _display_to_vol(display: float) -> str:
-        """Display value 0–50 → Deluge hex volume string."""
-        amp = max(0.0, min(1.0, display / 50.0))
-        v = int(amp * 4_294_967_295) - 2_147_483_648
-        return f"0x{v & 0xFFFFFFFF:08X}"
+    # ── Volume-Cap Helpers (delegiert an core.volume_utils) ───────────────
+    _vol_to_display = staticmethod(vol_to_display)
+    _display_to_vol = staticmethod(display_to_vol)
 
     def _cap_song_master(self):
         song = self._selected_song()
@@ -568,3 +556,4 @@ class SongManagerModule(QWidget):
                 self.request_rescan.emit()
             except Exception as e:
                 QMessageBox.warning(self, "Fehler", str(e))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       

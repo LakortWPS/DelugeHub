@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt, QEvent
 from .theme import get_theme
 from .core.history import ActionHistory
 from .core.sd_scanner import ScanWorker
+from .core.staging import StagingStore
 from .modules.dashboard import DashboardModule
 from .modules.lost_sample_finder import LostSampleFinderModule
 from .modules.sample_manager import SampleManagerModule
@@ -87,11 +88,21 @@ class MainWindow(QMainWindow):
         self._history = ActionHistory()
         self._history.set_on_change(self._on_history_changed)
 
+        # Global staging store — one instance, shared across all modules
+        self._staging = StagingStore()
+
         self._build_ui()
         self._apply_theme(self._current_theme)
 
-        if self._settings.get("sd_path") and self._settings.get("auto_scan", False):
-            self._start_scan(self._settings["sd_path"])
+        # Set sd_root and restore any pending changes left from last session
+        sd_path = self._settings.get("sd_path")
+        if sd_path:
+            p = Path(sd_path)
+            self._staging.set_sd_root(p)
+            self._staging.load_from_disk(p)
+
+        if sd_path and self._settings.get("auto_scan", False):
+            self._start_scan(sd_path)
 
     # ── Settings persistence ───────────────────────────────────────────────
     def _settings_path(self) -> Path:
@@ -107,9 +118,15 @@ class MainWindow(QMainWindow):
         return {"theme": "dark", "sd_path": "", "auto_scan": False}
 
     def _save_settings(self):
-        p = self._settings_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(self._settings, indent=2))
+        try:
+            p = self._settings_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(self._settings, indent=2))
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(
+                "Einstellungen konnten nicht gespeichert werden: %s", e
+            )
 
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -387,6 +404,12 @@ class MainWindow(QMainWindow):
         for module in self._modules.values():
             if hasattr(module, "set_history"):
                 module.set_history(self._history)
+
+        # Wire shared staging store to all modules that support it
+        for module in self._modules.values():
+            if hasattr(module, "set_staging"):
+                module.set_staging(self._staging)
+
         settings_mod.sd_path_changed.connect(self._on_sd_path_changed)
         settings_mod.theme_changed.connect(self._apply_theme)
         settings_mod.auto_scan_changed.connect(self._on_auto_scan_changed)
@@ -414,6 +437,14 @@ class MainWindow(QMainWindow):
         backup = self._modules.get("backup_sync")
         if backup:
             backup.set_sd_root(path)
+        # Update staging root and restore any pending changes for the new path
+        p = Path(path)
+        self._staging.set_sd_root(p)
+        self._staging.load_from_disk(p)
+        # Refresh all pending panels
+        for module in self._modules.values():
+            if hasattr(module, "_pending_panel"):
+                module._pending_panel.refresh()
         self._save_settings()
         self._start_scan(path)
 
@@ -555,24 +586,4 @@ class MainWindow(QMainWindow):
         try:
             desc = self._history.undo()
             if desc:
-                self._status_label.setText(f"↩  Rückgängig: {desc}")
-                self._trigger_scan()
-        except Exception as e:
-            QMessageBox.warning(self, "Undo fehlgeschlagen", str(e))
-
-    def _do_redo(self):
-        try:
-            desc = self._history.redo()
-            if desc:
-                self._status_label.setText(f"↪  Wiederholt: {desc}")
-                self._trigger_scan()
-        except Exception as e:
-            QMessageBox.warning(self, "Redo fehlgeschlagen", str(e))
-
-    # ── Cleanup ────────────────────────────────────────────────────────────
-    def closeEvent(self, event):
-        self._save_settings()
-        if self._scan_worker and self._scan_worker.isRunning():
-            self._scan_worker.cancel()
-            self._scan_worker.wait()
-        super().closeEvent(event)
+          

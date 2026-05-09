@@ -3,7 +3,9 @@ DelugeHub — Entry Point
 """
 import sys
 import logging
+from pathlib import Path
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QIcon
 from PySide6.QtCore import Qt
 
 from app.main_window import MainWindow
@@ -21,6 +23,10 @@ def main():
     app.setApplicationName("DelugeHub")
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("DelugeHub")
+
+    _icon_path = Path(__file__).parent / "icon.ico"
+    if _icon_path.exists():
+        app.setWindowIcon(QIcon(str(_icon_path)))
     # AA_UseHighDpiPixmaps is enabled by default in PySide6 6.x and deprecated
     # — no need to set it manually.
 

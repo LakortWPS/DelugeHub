@@ -5,6 +5,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.3] — 2026-05-09
+
+### Fixed
+- **StagingStore wiring** (`main_window.py`): shared `StagingStore` instance is now correctly injected into all modules via `set_staging()` loop and re-wired on SD path change; pending changes are restored from `.delugyhub_pending.json` on startup
+- **Volume helpers centralized** (`core/volume_utils.py`): `vol_to_display`, `display_to_vol`, `vol_to_amp`, `amp_to_vol` moved to a shared module — removed three identical inline copies from `kit_manager`, `song_manager`, `batch_hub`
+- **Kit Manager — normalize replace bug**: volume replacement now uses a `search_pos` tracker to prevent the wrong occurrence from being replaced when multiple pads share the same hex value
+- **Sample Manager — audio playback**: switched primary audio loader to `soundfile`, which natively handles 24/32-bit WAV, AIF/AIFF, FLAC and OGG; stdlib `wave` kept as fallback for 16-bit WAV only
+- **`models.py` — `files_with_missing`**: synths were not included in the missing-files list; all three content types (songs, kits, synths) are now returned
+- **Synth Editor — `_save_params` replace collision**: parameter replacement is now anchored to the tag name (`>old_hex</tag>`) instead of a bare hex string, preventing a parameter with a coincidentally identical value from being overwritten
+- **Lost Sample Finder — manual fix ignored**: `_manual_fix_row` wrote the chosen path to `ref.user_choice` (never read); corrected to `ref.resolution` so double-click manual assignments are actually applied on "Fixes anwenden"
+- **Lost Sample Finder — `relative_to()` crash**: `ApplyFixWorker` now catches `ValueError` when the resolved path is outside the guessed SD root and falls back to the absolute path
+
+---
+
 ## [2.0.2] — 2026-04-16
 
 ### Added

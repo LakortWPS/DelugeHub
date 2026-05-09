@@ -491,7 +491,7 @@ class SynthEditorModule(QWidget):
             tree = ET.parse(self._current_synth.file_path)
             root = tree.getroot()
 
-            replacements: list[tuple[str, str]] = []   # (old_hex, new_hex)
+            replacements: list[tuple[str, str, str]] = []   # (old_hex, new_hex, tag)
 
             for key, xpath in mappings.items():
                 if key not in self._param_sliders:
@@ -505,20 +505,18 @@ class SynthEditorModule(QWidget):
                 new_val = self._param_sliders[key]._slider.value() / 1000.0
                 new_hex = norm_to_hex(new_val)
                 if old_hex != new_hex:
-                    replacements.append((old_hex, new_hex))
+                    replacements.append((old_hex, new_hex, el.tag))
 
             if not replacements:
                 self._status.setText(f"ℹ  Keine Änderungen: {self._current_synth.name}")
                 return
 
-            # Pass 2: targeted text replacement — preserves file structure
-            # and encoding completely.
+            # Pass 2: tag-anchored replacement — ">old_hex</tag>" is specific
+            # enough to avoid clobbering a different param that shares the value.
             text, enc = _read_xml(self._current_synth.file_path)
             text_before = text
-            for old_hex, new_hex in replacements:
-                # Replace only the first occurrence to avoid accidentally
-                # touching unrelated elements that share the same value.
-                text = text.replace(old_hex, new_hex, 1)
+            for old_hex, new_hex, tag in replacements:
+                text = text.replace(f">{old_hex}</{tag}>", f">{new_hex}</{tag}>", 1)
 
             _write_xml(self._current_synth.file_path, text, enc)
             self._status.setText(f"✅  Gespeichert: {self._current_synth.name}")
@@ -687,3 +685,4 @@ class SynthEditorModule(QWidget):
             self.request_rescan.emit()
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
+                                                  

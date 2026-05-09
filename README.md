@@ -6,7 +6,7 @@
 ![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-green)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Version](https://img.shields.io/badge/Version-2.0.2-orange)
+![Version](https://img.shields.io/badge/Version-2.0.3-orange)
 
 DelugeHub is a desktop application for managing the SD card of the [Synthstrom Deluge](https://synthstrom.com/product/deluge/) synthesizer. It lets you browse, edit, rename and export songs, kits, synths and samples — all from your computer, with a non-destructive staging system that only writes changes to disk when you say so.
 
@@ -77,7 +77,7 @@ pip install sounddevice numpy
 
 ### Windows installer (no Python required)
 
-Download `DelugeHub-2.0.2-Setup.exe` from the [latest release](https://github.com/LakortWPS/DelugeHub/releases/latest) and run it. No Python installation needed.
+Download `DelugeHub-2.0.3-Setup.exe` from the [latest release](https://github.com/LakortWPS/DelugeHub/releases/latest) and run it. No Python installation needed.
 
 ---
 
@@ -102,6 +102,7 @@ DelugeHub/
     │   ├── sd_scanner.py    ← Async SD-card scanner
     │   ├── file_ops.py      ← File operations + XML path update
     │   ├── staging.py       ← StagingStore, PendingChange, ChangeType
+    │   ├── volume_utils.py  ← Deluge volume encoding helpers (shared)
     │   ├── lost_finder.py   ← Lost sample logic
     │   └── backup.py        ← Backup/restore, ZIP management
     ├── widgets/
@@ -129,7 +130,7 @@ See [installer/README.md](installer/README.md) for full instructions.
 installer\build_installer.bat
 ```
 
-**Output:** `installer\output\DelugeHub-2.0.2-Setup.exe`
+**Output:** `installer\output\DelugeHub-2.0.3-Setup.exe`
 
 ---
 
@@ -137,7 +138,7 @@ installer\build_installer.bat
 
 See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
-**Latest:** [v2.0.2](https://github.com/LakortWPS/DelugeHub/releases/tag/v2.0.2) — Windows installer build system, Batch Hub fix, synth_editor null byte fix.
+**Latest:** [v2.0.3](https://github.com/LakortWPS/DelugeHub/releases/tag/v2.0.3) — Bugfix release: StagingStore wiring, volume helpers centralized, sample playback, synth param save fix, lost sample finder manual fix.
 
 ---
 

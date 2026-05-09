@@ -1,9 +1,9 @@
 ; Inno Setup Script — DelugeHub Installer
 ; https://jrsoftware.org/isinfo.php
-; Version: 2.0.2
+; Version: 2.0.3
 
 #define AppName      "DelugeHub"
-#define AppVersion   "2.0.2"
+#define AppVersion   "2.0.3"
 #define AppPublisher "LakortWPS"
 #define AppURL       "https://github.com/LakortWPS/DelugeHub"
 #define AppExeName   "DelugeHub.exe"

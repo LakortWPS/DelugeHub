@@ -53,9 +53,13 @@ class ApplyFixWorker(QThread):
         total = len(ready)
 
         for i, ref in enumerate(ready):
-            new_rel = str(ref.resolution.relative_to(
-                _guess_sd_root(ref.xml_file)
-            )).replace("\\", "/")
+            try:
+                new_rel = str(ref.resolution.relative_to(
+                    _guess_sd_root(ref.xml_file)
+                )).replace("\\", "/")
+            except ValueError:
+                # resolution is not inside the guessed SD root — use absolute path
+                new_rel = str(ref.resolution).replace("\\", "/")
 
             ok = update_xml_path(ref.xml_file, ref.broken_path, new_rel)
             if ok:
@@ -412,7 +416,7 @@ class LostSampleFinderModule(QWidget):
             "Audio Files (*.wav *.aif *.aiff *.mp3 *.flac *.ogg);;All Files (*)"
         )
         if file_path:
-            ref.user_choice = Path(file_path)
+            ref.resolution = Path(file_path)
             ref.match_confidence = "manual"
             self._refresh_row(row)
             self._update_apply_button()
@@ -621,6 +625,3 @@ class LostSampleFinderModule(QWidget):
             match_str = str(ref.resolution) if ref.resolution else ""
             status = "Repariert" if ref.fixed else ("Bereit" if ref.resolution else "Offen")
             lines.append(f'"{ref.xml_file}","{ref.xml_type}","{ref.broken_path}",'
-                         f'"{match_str}","{ref.match_confidence}","{status}"\n')
-        Path(path).write_text("".join(lines), encoding="utf-8")
-        self._stats_label.setText(f"Report gespeichert: {path}")

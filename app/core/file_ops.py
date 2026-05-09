@@ -31,9 +31,15 @@ def _read_xml(path: Path) -> tuple[str, str]:
     raise RuntimeError(f"Could not decode {path} with any known encoding")
 
 
-def _write_xml(path: Path, content: str, encoding: str) -> None:
-    """Write XML content back using the same encoding it was read with."""
-    path.write_text(content, encoding=encoding)
+def _write_xml(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Atomarer Schreibvorgang via Temp-Datei + rename."""
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(content, encoding=encoding)
+        tmp.replace(path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _all_xml_files(sd_root: Path) -> list[Path]:

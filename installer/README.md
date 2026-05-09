@@ -23,7 +23,7 @@ The script runs two steps automatically:
 
 **Step 1 — PyInstaller** bundles the app into a standalone Windows executable (no Python required on the end user's machine). Output: `dist\DelugeHub\`
 
-**Step 2 — Inno Setup** packages the build into a classic Windows setup wizard. Output: `installer\output\DelugeHub-2.0.2-Setup.exe`
+**Step 2 — Inno Setup** packages the build into a classic Windows setup wizard. Output: `installer\output\DelugeHub-2.0.3-Setup.exe`
 
 ---
 

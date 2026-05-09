@@ -37,57 +37,67 @@ class WaveformWidget(QWidget):
     # of most samples without reading huge files entirely into memory.
     _MAX_FRAMES = 88_200
 
-    def load_wav(self, path: Path):
+    def load_audio(self, path: Path):
         """
-        Read a WAV file and build a ~200-point downsampled amplitude envelope
-        that spans the WHOLE file (not just the first 93 ms).
-        For files longer than _MAX_FRAMES we spread reads evenly across the
-        file so the shape is still representative.
+        Lädt eine Audio-Datei und baut eine ~200-Punkte Amplituden-Hüllkurve
+        für die Anzeige. Unterstützt WAV (alle Bit-Tiefen), AIF/AIFF, FLAC, OGG.
+        Nutzt soundfile wenn verfügbar, fällt sonst auf stdlib wave zurück.
         """
         try:
-            with wave.open(str(path), "rb") as wf:
-                n_frames = wf.getnframes()
-                n_channels = wf.getnchannels()
-                sampwidth = wf.getsampwidth()
-
-                if n_frames == 0:
+            try:
+                import soundfile as sf
+                import numpy as np
+                # soundfile liest die gesamte Datei als float32
+                data, _ = sf.read(str(path), dtype="float32", always_2d=True)
+                # Mono-Mixdown
+                mono = data.mean(axis=1)
+                total = len(mono)
+                if total == 0:
                     self._samples = []
                     self.update()
                     return
+                # Auf _MAX_FRAMES begrenzen (gleichmäßig verteilt)
+                if total > self._MAX_FRAMES:
+                    idx = [int(i * total / self._MAX_FRAMES) for i in range(self._MAX_FRAMES)]
+                    mono = mono[idx]
+                normalized = mono.tolist()
+            except ImportError:
+                # Fallback: stdlib wave — 16-bit WAV only
+                with wave.open(str(path), "rb") as wf:
+                    n_frames = wf.getnframes()
+                    n_channels = wf.getnchannels()
+                    sampwidth = wf.getsampwidth()
+                    if n_frames == 0:
+                        self._samples = []
+                        self.update()
+                        return
+                    if n_frames <= self._MAX_FRAMES:
+                        frames = wf.readframes(n_frames)
+                    else:
+                        stride = n_frames // self._MAX_FRAMES
+                        chunks: list[bytes] = []
+                        for i in range(self._MAX_FRAMES):
+                            wf.setpos(i * stride)
+                            chunks.append(wf.readframes(1))
+                        frames = b"".join(chunks)
 
-                # Read up to _MAX_FRAMES evenly spaced across the file.
-                if n_frames <= self._MAX_FRAMES:
-                    frames = wf.readframes(n_frames)
+                if sampwidth == 2:
+                    count = len(frames) // 2
+                    raw = struct.unpack(f"<{count}h", frames[:count * 2])
+                    normalized = [s / 32768.0 for s in raw]
+                elif sampwidth == 1:
+                    raw = struct.unpack(f"{len(frames)}B", frames)
+                    normalized = [(s - 128) / 128.0 for s in raw]
                 else:
-                    # Read _MAX_FRAMES frames starting at a stride-sampled
-                    # position so we cover the full file.
-                    stride = n_frames // self._MAX_FRAMES
-                    chunks: list[bytes] = []
-                    for i in range(self._MAX_FRAMES):
-                        wf.setpos(i * stride)
-                        chunks.append(wf.readframes(1))
-                    frames = b"".join(chunks)
+                    normalized = []
 
-            bytes_per_sample = sampwidth * n_channels
+                if n_channels > 1:
+                    normalized = [
+                        sum(normalized[i:i + n_channels]) / n_channels
+                        for i in range(0, len(normalized) - n_channels + 1, n_channels)
+                    ]
 
-            if sampwidth == 2:
-                count = len(frames) // 2
-                raw = struct.unpack(f"<{count}h", frames[:count * 2])
-                normalized = [s / 32768.0 for s in raw]
-            elif sampwidth == 1:
-                raw = struct.unpack(f"{len(frames)}B", frames)
-                normalized = [(s - 128) / 128.0 for s in raw]
-            else:
-                normalized = []
-
-            if n_channels > 1:
-                # Mix down to mono by averaging channels.
-                normalized = [
-                    sum(normalized[i:i + n_channels]) / n_channels
-                    for i in range(0, len(normalized) - n_channels + 1, n_channels)
-                ]
-
-            # Downsample to ~200 display points using peak amplitude per chunk.
+            # Auf ~200 Anzeigewerte downsamplen (Peak-Amplitude pro Chunk)
             target = 200
             chunk = max(1, len(normalized) // target)
             self._samples = [
@@ -98,6 +108,10 @@ class WaveformWidget(QWidget):
         except Exception:
             self._samples = []
         self.update()
+
+    # Rückwärtskompatibilitäts-Alias
+    def load_wav(self, path: Path):
+        self.load_audio(path)
 
     def clear(self):
         self._samples = []
@@ -150,40 +164,57 @@ class WaveformWidget(QWidget):
         painter.end()
 
 
-# ── Audio player (optional sounddevice) ───────────────────────────────────
+# ── Audio player (soundfile + sounddevice) ────────────────────────────────
 class AudioPlayer:
+    """
+    Spielt Audio-Dateien über sounddevice ab.
+    Nutzt soundfile zum Dekodieren — unterstützt WAV (8/16/24/32-bit),
+    AIF/AIFF, FLAC, OGG und MP3.
+    Fällt bei fehlendem soundfile auf das stdlib wave-Modul zurück
+    (dann nur 16-bit WAV).
+    """
+
     def __init__(self):
         self._playing = False
         try:
             import sounddevice as sd
-            import numpy as np
             self._sd = sd
-            self._np = np
             self._available = True
         except ImportError:
             self._available = False
+
+        try:
+            import soundfile as sf
+            self._sf = sf
+            self._has_sf = True
+        except ImportError:
+            self._has_sf = False
 
     def play(self, path: Path):
         if not self._available:
             return
         self.stop()
         try:
-            with wave.open(str(path), "rb") as wf:
-                n_frames = wf.getnframes()
-                n_channels = wf.getnchannels()
-                sampwidth = wf.getsampwidth()
-                sample_rate = wf.getframerate()
-                frames = wf.readframes(n_frames)
-
-            if sampwidth == 2:
-                data = self._np.frombuffer(frames, dtype=self._np.int16).astype(float) / 32768.0
-            elif sampwidth == 1:
-                data = (self._np.frombuffer(frames, dtype=self._np.uint8).astype(float) - 128) / 128.0
+            if self._has_sf:
+                # soundfile handles WAV (all bit depths), AIF/AIFF, FLAC, OGG
+                data, sample_rate = self._sf.read(str(path), dtype="float32", always_2d=False)
             else:
-                return
-
-            if n_channels > 1:
-                data = data.reshape(-1, n_channels)
+                # Fallback: stdlib wave — 16-bit WAV only
+                import numpy as np
+                with wave.open(str(path), "rb") as wf:
+                    n_frames = wf.getnframes()
+                    n_channels = wf.getnchannels()
+                    sampwidth = wf.getsampwidth()
+                    sample_rate = wf.getframerate()
+                    frames = wf.readframes(n_frames)
+                if sampwidth == 2:
+                    data = np.frombuffer(frames, dtype=np.int16).astype("float32") / 32768.0
+                elif sampwidth == 1:
+                    data = (np.frombuffer(frames, dtype=np.uint8).astype("float32") - 128) / 128.0
+                else:
+                    return  # 24/32-bit ohne soundfile nicht unterstützt
+                if n_channels > 1:
+                    data = data.reshape(-1, n_channels)
 
             self._playing = True
             self._sd.play(data, sample_rate)
@@ -201,6 +232,11 @@ class AudioPlayer:
     @property
     def available(self):
         return self._available
+
+    @property
+    def supports_all_formats(self) -> bool:
+        """True wenn soundfile verfügbar (24-bit, AIF, etc.)."""
+        return self._has_sf
 
 
 # ── Sample Manager ─────────────────────────────────────────────────────────
@@ -512,9 +548,10 @@ class SampleManagerModule(QWidget):
         info += f"Genutzt von: {len(s.referenced_by)} Dateien"
         self._detail_info.setText(info)
 
-        # Waveform
-        if s.file_path.suffix.lower() == ".wav" and s.file_path.exists():
-            self._waveform.load_wav(s.file_path)
+        # Waveform — alle unterstützten Formate
+        ext = s.file_path.suffix.lower()
+        if s.file_path.exists() and ext in AUDIO_EXTENSIONS:
+            self._waveform.load_audio(s.file_path)
         else:
             self._waveform.clear()
 
@@ -536,10 +573,24 @@ class SampleManagerModule(QWidget):
         self._rename_btn.setEnabled(can_edit)
         self._move_btn.setEnabled(can_edit)
         self._delete_btn.setEnabled(can_edit)
-        self._play_btn.setEnabled(
-            can_edit and s.file_path.suffix.lower() == ".wav"
+        # Play: alle Audio-Formate wenn soundfile verfügbar,
+        # sonst nur 16-bit WAV (stdlib-Fallback)
+        ext = s.file_path.suffix.lower()
+        can_play = (
+            can_edit
             and self._player.available
+            and (
+                self._player.supports_all_formats and ext in AUDIO_EXTENSIONS
+                or (not self._player.supports_all_formats and ext == ".wav")
+            )
         )
+        self._play_btn.setEnabled(can_play)
+        if not self._player.available:
+            self._play_btn.setToolTip("sounddevice nicht installiert — pip install sounddevice")
+        elif not self._player.supports_all_formats and ext != ".wav":
+            self._play_btn.setToolTip("soundfile nicht installiert — pip install soundfile")
+        else:
+            self._play_btn.setToolTip("")
         self._stop_btn.setEnabled(True)
 
     def _play_selected(self):
@@ -673,55 +724,4 @@ class SampleManagerModule(QWidget):
             if copy_file_to_sd(src, dest):
                 success += 1
 
-        self._status.setText(f"✅  {success}/{len(files)} Samples importiert.")
-        if success > 0:
-            self.request_rescan.emit()
-
-    # ── Unused & duplicates ────────────────────────────────────────────────
-    def _show_unused(self):
-        if not self._index:
-            return
-        unused = self._index.unused_samples
-        self._populate_table(unused)
-        self._status.setText(f"{len(unused)} ungenutzte Samples angezeigt. Vorsicht beim Löschen!")
-
-    def _find_duplicates(self):
-        if not self._index:
-            return
-        # Find by name
-        seen: dict[str, list[Sample]] = {}
-        for s in self._index.samples:
-            key = s.name.lower()
-            if key not in seen:
-                seen[key] = []
-            seen[key].append(s)
-        dupes = [s for samples in seen.values() if len(samples) > 1 for s in samples]
-        self._populate_table(dupes)
-        self._status.setText(f"{len(dupes)} potenzielle Duplikate (gleicher Dateiname).")
-
-    # ── Context menu ───────────────────────────────────────────────────────
-    def _context_menu(self, pos):
-        from PySide6.QtWidgets import QMenu
-        row = self._table.rowAt(pos.y())
-        if row < 0:
-            return
-        item = self._table.item(row, 0)
-        if not item:
-            return
-        s: Sample = item.data(Qt.UserRole)
-
-        menu = QMenu(self)
-        if s.file_path.suffix.lower() == ".wav" and s.file_path.exists():
-            act_play = menu.addAction("▶  Abspielen")
-            act_play.triggered.connect(lambda: self._player.play(s.file_path))
-        menu.addSeparator()
-        act_rename = menu.addAction("✏  Umbenennen")
-        act_rename.triggered.connect(self._rename_selected)
-        act_move = menu.addAction("📂  Verschieben")
-        act_move.triggered.connect(self._move_selected)
-        menu.addSeparator()
-        act_del = menu.addAction("🗑  Löschen")
-        act_del.triggered.connect(self._delete_selected)
-        act_copy = menu.addAction("📋  Pfad kopieren")
-        act_copy.triggered.connect(lambda: __import__("PySide6.QtWidgets", fromlist=["QApplication"]).QApplication.clipboard().setText(str(s.file_path)))
-        menu.exec(self._table.viewport().mapToGlobal(pos))
+        self._status.setText(f"✅  {success}/{len(files)} Samples im
