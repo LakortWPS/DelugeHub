@@ -6,7 +6,7 @@
 ![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-green)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Version](https://img.shields.io/badge/Version-2.0.3-orange)
+![Version](https://img.shields.io/badge/Version-2.0.4-orange)
 
 DelugeHub is a desktop application for managing the SD card of the [Synthstrom Deluge](https://synthstrom.com/product/deluge/) synthesizer. It lets you browse, edit, rename and export songs, kits, synths and samples — all from your computer, with a non-destructive staging system that only writes changes to disk when you say so.
 
@@ -77,7 +77,7 @@ pip install sounddevice numpy
 
 ### Windows installer (no Python required)
 
-Download `DelugeHub-2.0.3-Setup.exe` from the [latest release](https://github.com/LakortWPS/DelugeHub/releases/latest) and run it. No Python installation needed.
+Download `DelugeHub-2.0.4-Setup.exe` from the [latest release](https://github.com/LakortWPS/DelugeHub/releases/latest) and run it. No Python installation needed.
 
 ---
 
@@ -130,7 +130,7 @@ See [installer/README.md](installer/README.md) for full instructions.
 installer\build_installer.bat
 ```
 
-**Output:** `installer\output\DelugeHub-2.0.3-Setup.exe`
+**Output:** `installer\output\DelugeHub-2.0.4-Setup.exe`
 
 ---
 
@@ -138,7 +138,7 @@ installer\build_installer.bat
 
 See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
-**Latest:** [v2.0.3](https://github.com/LakortWPS/DelugeHub/releases/tag/v2.0.3) — Bugfix release: StagingStore wiring, volume helpers centralized, sample playback, synth param save fix, lost sample finder manual fix.
+**Latest:** [v2.0.4](https://github.com/LakortWPS/DelugeHub/releases/tag/v2.0.4) — Bugfix release: synth editor parameter save collision fix (parent-block scoping), Inno Setup deprecation warnings resolved.
 
 ---
 

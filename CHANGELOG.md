@@ -5,6 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.4] — 2026-05-20
+
+### Fixed
+- **Synth Editor — `_save_params` parameter collision**: tag-anchored replacement narrowed to parent element scope (e.g. search within `<osc1>…</osc1>`) — prevents `osc1/volume` and `osc2/volume` from overwriting each other when they share the same hex value
+- **Installer** (`setup.iss`): deprecated `x64` architecture identifier replaced with `x64compatible`; removed obsolete `OnlyBelowVersion 6.1` QuickLaunch entry (Windows Vista-era, no longer applicable)
+
+---
+
 ## [2.0.3] — 2026-05-09
 
 ### Fixed
