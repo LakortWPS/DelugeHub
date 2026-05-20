@@ -28,6 +28,7 @@ class BackupEntry:
     size_bytes: int = 0
     file_count: int = 0
     notes: str = ""
+    exclude_samples: bool = False
 
     @property
     def size_mb(self) -> float:
@@ -55,6 +56,7 @@ def load_backup_history(backup_dir: Path) -> list[BackupEntry]:
                 size_bytes=zf.stat().st_size,
                 file_count=meta.get("file_count", 0),
                 notes=meta.get("notes", ""),
+                exclude_samples=meta.get("exclude_samples", False),
             ))
         else:
             # ZIP without meta — still include
@@ -214,6 +216,7 @@ class BackupWorker(QThread):
                     "sd_root": str(self.sd_root),
                     "file_count": file_count,
                     "notes": self.notes,
+                    "exclude_samples": self.exclude_samples,
                     "version": "1.0",
                 }
                 zf.writestr(BACKUP_META_FILE, json.dumps(meta, indent=2))

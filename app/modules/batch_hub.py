@@ -765,10 +765,13 @@ class BatchHubModule(QWidget):
             d = self._index.root_path / folder
             if not d.exists():
                 continue
-            # Beide Schreibweisen abdecken (FAT32-SD-Cards: meist .XML, Linux: evtl. .xml)
-            xml_files = list(d.rglob("*.XML")) + [
-                f for f in d.rglob("*.xml") if f.suffix == ".xml"
-            ]
+            # Beide Schreibweisen abdecken, deduplizieren (case-insensitiv auf Windows/FAT32)
+            seen_xml = set()
+            xml_files = []
+            for f in d.rglob("*"):
+                if f.is_file() and f.suffix.lower() == ".xml" and f not in seen_xml:
+                    seen_xml.add(f)
+                    xml_files.append(f)
             for xml in xml_files:
                 total += 1
                 try:
@@ -808,8 +811,17 @@ class BatchHubModule(QWidget):
             d = self._index.root_path / folder
             if not d.exists():
                 continue
-            xml_files = list(d.rglob("*.XML")) + [
-                f for f in d.rglob("*.xml") if f.suffix == ".xml"
-            ]
+            seen_xml2 = set()
+            xml_files = []
+            for f in d.rglob("*"):
+                if f.is_file() and f.suffix.lower() == ".xml" and f not in seen_xml2:
+                    seen_xml2.add(f)
+                    xml_files.append(f)
             for xml in xml_files:
-                from ..core.file_ops import update_xml_pa                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+                from ..core.file_ops import update_xml_path
+                if update_xml_path(xml, find_text, replace_text):
+                    modified += 1
+
+        self._status.setText(f"✅  {modified} XML-Dateien aktualisiert.")
+        if modified:
+            self.request_rescan.emit()

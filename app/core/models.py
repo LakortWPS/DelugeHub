@@ -134,4 +134,6 @@ class SDCardIndex:
     def unused_samples(self) -> list[Sample]:
         return [s for s in self.samples if not s.is_used]
 
-    @proper
+    @property
+    def total_sample_size_mb(self) -> float:
+        return sum(s.size_mb for s in self.samples)

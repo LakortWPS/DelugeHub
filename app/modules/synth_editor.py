@@ -491,7 +491,7 @@ class SynthEditorModule(QWidget):
             tree = ET.parse(self._current_synth.file_path)
             root = tree.getroot()
 
-            replacements: list[tuple[str, str, str]] = []   # (old_hex, new_hex, tag)
+            replacements: list[tuple[str, str, str, str]] = []   # (old_hex, new_hex, tag, xpath)
 
             for key, xpath in mappings.items():
                 if key not in self._param_sliders:
@@ -505,18 +505,49 @@ class SynthEditorModule(QWidget):
                 new_val = self._param_sliders[key]._slider.value() / 1000.0
                 new_hex = norm_to_hex(new_val)
                 if old_hex != new_hex:
-                    replacements.append((old_hex, new_hex, el.tag))
+                    replacements.append((old_hex, new_hex, el.tag, xpath))
 
             if not replacements:
                 self._status.setText(f"ℹ  Keine Änderungen: {self._current_synth.name}")
                 return
 
-            # Pass 2: tag-anchored replacement — ">old_hex</tag>" is specific
-            # enough to avoid clobbering a different param that shares the value.
+            # Pass 2: parent-scoped replacement.
+            #
+            # Tags like <volume>, <attack>, <decay> etc. appear multiple times
+            # in a synth file (osc1/volume, osc2/volume, envelope1/attack, …).
+            # A bare str.replace() would always hit the first occurrence, which
+            # may be the wrong element if two params share the same hex value.
+            #
+            # Fix: narrow the search to the parent element's text block.
+            # e.g. ".//osc1/volume" → search only inside <osc1>…</osc1>.
+            # For top-level paths (no parent) fall back to a full-document search.
             text, enc = _read_xml(self._current_synth.file_path)
             text_before = text
-            for old_hex, new_hex, tag in replacements:
-                text = text.replace(f">{old_hex}</{tag}>", f">{new_hex}</{tag}>", 1)
+            for old_hex, new_hex, tag, xpath in replacements:
+                path_parts = [p for p in xpath.replace(".", "").split("/") if p]
+                replaced = False
+                if len(path_parts) >= 2:
+                    parent_tag = path_parts[-2]
+                    # Match either <parent> or <parent attr=…>
+                    ps = -1
+                    for opener in (f"<{parent_tag}>", f"<{parent_tag} "):
+                        ps = text.find(opener)
+                        if ps != -1:
+                            break
+                    if ps != -1:
+                        pe = text.find(f"</{parent_tag}>", ps)
+                        if pe != -1:
+                            pe += len(f"</{parent_tag}>")
+                            block = text[ps:pe]
+                            new_block = block.replace(
+                                f">{old_hex}</{tag}>", f">{new_hex}</{tag}>", 1
+                            )
+                            if new_block != block:
+                                text = text[:ps] + new_block + text[pe:]
+                                replaced = True
+                if not replaced:
+                    # Fallback: unique top-level element or parent block not found
+                    text = text.replace(f">{old_hex}</{tag}>", f">{new_hex}</{tag}>", 1)
 
             _write_xml(self._current_synth.file_path, text, enc)
             self._status.setText(f"✅  Gespeichert: {self._current_synth.name}")
@@ -685,4 +716,3 @@ class SynthEditorModule(QWidget):
             self.request_rescan.emit()
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
-                                                  

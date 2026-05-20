@@ -724,4 +724,55 @@ class SampleManagerModule(QWidget):
             if copy_file_to_sd(src, dest):
                 success += 1
 
-        self._status.setText(f"✅  {success}/{len(files)} Samples im
+        self._status.setText(f"✅  {success}/{len(files)} Samples importiert.")
+        if success > 0:
+            self.request_rescan.emit()
+
+    # ── Unused & duplicates ────────────────────────────────────────────────
+    def _show_unused(self):
+        if not self._index:
+            return
+        unused = self._index.unused_samples
+        self._populate_table(unused)
+        self._status.setText(f"{len(unused)} ungenutzte Samples angezeigt. Vorsicht beim Löschen!")
+
+    def _find_duplicates(self):
+        if not self._index:
+            return
+        # Find by name
+        seen: dict[str, list[Sample]] = {}
+        for s in self._index.samples:
+            key = s.name.lower()
+            if key not in seen:
+                seen[key] = []
+            seen[key].append(s)
+        dupes = [s for samples in seen.values() if len(samples) > 1 for s in samples]
+        self._populate_table(dupes)
+        self._status.setText(f"{len(dupes)} potenzielle Duplikate (gleicher Dateiname).")
+
+    # ── Context menu ───────────────────────────────────────────────────────
+    def _context_menu(self, pos):
+        from PySide6.QtWidgets import QMenu
+        row = self._table.rowAt(pos.y())
+        if row < 0:
+            return
+        item = self._table.item(row, 0)
+        if not item:
+            return
+        s: Sample = item.data(Qt.UserRole)
+
+        menu = QMenu(self)
+        if s.file_path.suffix.lower() == ".wav" and s.file_path.exists():
+            act_play = menu.addAction("▶  Abspielen")
+            act_play.triggered.connect(lambda: self._player.play(s.file_path))
+        menu.addSeparator()
+        act_rename = menu.addAction("✏  Umbenennen")
+        act_rename.triggered.connect(self._rename_selected)
+        act_move = menu.addAction("📂  Verschieben")
+        act_move.triggered.connect(self._move_selected)
+        menu.addSeparator()
+        act_del = menu.addAction("🗑  Löschen")
+        act_del.triggered.connect(self._delete_selected)
+        act_copy = menu.addAction("📋  Pfad kopieren")
+        act_copy.triggered.connect(lambda: __import__("PySide6.QtWidgets", fromlist=["QApplication"]).QApplication.clipboard().setText(str(s.file_path)))
+        menu.exec(self._table.viewport().mapToGlobal(pos))

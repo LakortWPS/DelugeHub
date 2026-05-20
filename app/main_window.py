@@ -586,4 +586,24 @@ class MainWindow(QMainWindow):
         try:
             desc = self._history.undo()
             if desc:
-          
+                self._status_label.setText(f"↩  Rückgängig: {desc}")
+                self._trigger_scan()
+        except Exception as e:
+            QMessageBox.warning(self, "Undo fehlgeschlagen", str(e))
+
+    def _do_redo(self):
+        try:
+            desc = self._history.redo()
+            if desc:
+                self._status_label.setText(f"↪  Wiederholt: {desc}")
+                self._trigger_scan()
+        except Exception as e:
+            QMessageBox.warning(self, "Redo fehlgeschlagen", str(e))
+
+    # ── Cleanup ────────────────────────────────────────────────────────────
+    def closeEvent(self, event):
+        self._save_settings()
+        if self._scan_worker and self._scan_worker.isRunning():
+            self._scan_worker.cancel()
+            self._scan_worker.wait()
+        super().closeEvent(event)

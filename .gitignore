@@ -27,6 +27,10 @@ ENV/
 # Uncomment if you don't want to track the spec:
 # Delugeyhub.spec
 
+# Installer build output (binary, not tracked in git)
+installer/Output/
+installer/output/
+
 # IDEs
 .vscode/
 .idea/

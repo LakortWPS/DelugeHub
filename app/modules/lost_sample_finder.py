@@ -416,7 +416,7 @@ class LostSampleFinderModule(QWidget):
             "Audio Files (*.wav *.aif *.aiff *.mp3 *.flac *.ogg);;All Files (*)"
         )
         if file_path:
-            ref.resolution = Path(file_path)
+            ref.user_choice = Path(file_path)
             ref.match_confidence = "manual"
             self._refresh_row(row)
             self._update_apply_button()
@@ -454,7 +454,10 @@ class LostSampleFinderModule(QWidget):
             text_before, enc = _read_xml(ref.xml_file)
 
             sd_root = _guess_sd_root(ref.xml_file)
-            new_rel = str(ref.resolution.relative_to(sd_root)).replace("\\", "/")
+            try:
+                new_rel = str(ref.resolution.relative_to(sd_root)).replace("\\", "/")
+            except ValueError:
+                new_rel = str(ref.resolution).replace("\\", "/")
             if update_xml_path(ref.xml_file, ref.broken_path, new_rel):
                 ref.fixed = True
                 self._refresh_row(row)
@@ -625,3 +628,6 @@ class LostSampleFinderModule(QWidget):
             match_str = str(ref.resolution) if ref.resolution else ""
             status = "Repariert" if ref.fixed else ("Bereit" if ref.resolution else "Offen")
             lines.append(f'"{ref.xml_file}","{ref.xml_type}","{ref.broken_path}",'
+                         f'"{match_str}","{ref.match_confidence}","{status}"\n')
+        Path(path).write_text("".join(lines), encoding="utf-8")
+        self._stats_label.setText(f"Report gespeichert: {path}")
