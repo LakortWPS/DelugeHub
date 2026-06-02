@@ -90,8 +90,7 @@ DelugeHub/
 
 ## Offene Punkte / Nächste Schritte
 
-1. **Minor/Code-Quality:**
-   - `kit_manager.py:663-664` — `_vol_to_display`/`_display_to_vol` als `staticmethod`-Wrapper könnten durch direkte Aufrufe ersetzt werden (vgl. `batch_hub.py` Import-Alias-Pattern)
+Keine bekannten offenen Punkte.
 
 ---
 
