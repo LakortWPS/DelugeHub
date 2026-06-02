@@ -5,7 +5,6 @@ Browse synths, edit parameters, randomize, export/import.
 import random
 import re
 import shutil
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
@@ -72,6 +71,9 @@ class ParamSlider(QWidget):
 
     def set_value(self, val: float):
         self._slider.setValue(int(max(0, min(1, val)) * 1000))
+
+    def get_value(self) -> float:
+        return self._slider.value() / 1000.0
 
 
 # ── Synth Editor ───────────────────────────────────────────────────────────
@@ -376,8 +378,11 @@ class SynthEditorModule(QWidget):
 
         # Load hex values from XML
         try:
-            tree = ET.parse(synth.file_path)
-            root = tree.getroot()
+            from ..core.xml_parser import _parse_xml_robust
+            root = _parse_xml_robust(synth.file_path)
+            if root is None:
+                self._status.setText(f"XML konnte nicht geparst werden: {synth.name}")
+                return
 
             def get_val(path: str, default: float = 0.5) -> float:
                 el = root.find(path)
@@ -448,13 +453,15 @@ class SynthEditorModule(QWidget):
 
     def _save_params(self):
         """
-        Save slider values back to the XML file.
+        Save slider values and combobox selections back to the XML file.
 
-        Uses a two-pass strategy to avoid ambiguous tag collisions:
-          1. Parse with ElementTree to resolve each full XPath to its
-             current hex value (guarantees we touch the right element).
-          2. Replace that specific hex string in the raw text so we never
-             reformat the document structure — the Deluge reads it as-is.
+        Uses a three-pass strategy:
+          1. Parse with _parse_xml_robust to resolve each XPath to its current
+             hex value (guarantees we touch the right element).
+          2. Replace hex strings in the raw text using parent-scoped search
+             to avoid collisions (e.g. osc1/volume vs osc2/volume).
+          3. Replace OSC types, LFO shape and filter mode using regex on the
+             raw text — these are string/int fields, not hex params.
         """
         if not self._current_synth:
             return
@@ -485,11 +492,13 @@ class SynthEditorModule(QWidget):
 
         try:
             from ..core.file_ops import _read_xml, _write_xml
+            from ..core.xml_parser import _parse_xml_robust
 
-            # Pass 1: build a map of { old_hex_value: new_hex_value }
-            # by resolving each element via ElementTree.
-            tree = ET.parse(self._current_synth.file_path)
-            root = tree.getroot()
+            # Pass 1: resolve current hex values via the robust parser.
+            root = _parse_xml_robust(self._current_synth.file_path)
+            if root is None:
+                QMessageBox.warning(self, "Fehler", "Synth-XML konnte nicht geparst werden.")
+                return
 
             replacements: list[tuple[str, str, str, str]] = []   # (old_hex, new_hex, tag, xpath)
 
@@ -500,35 +509,28 @@ class SynthEditorModule(QWidget):
                 if el is None:
                     continue
                 old_hex = (el.text or "").strip()
-                if not (old_hex.lower().startswith("0x")):
+                if not old_hex.lower().startswith("0x"):
                     continue   # not a hex param — skip
-                new_val = self._param_sliders[key]._slider.value() / 1000.0
+                new_val = self._param_sliders[key].get_value()
                 new_hex = norm_to_hex(new_val)
                 if old_hex != new_hex:
                     replacements.append((old_hex, new_hex, el.tag, xpath))
 
-            if not replacements:
-                self._status.setText(f"ℹ  Keine Änderungen: {self._current_synth.name}")
-                return
-
-            # Pass 2: parent-scoped replacement.
-            #
-            # Tags like <volume>, <attack>, <decay> etc. appear multiple times
-            # in a synth file (osc1/volume, osc2/volume, envelope1/attack, …).
-            # A bare str.replace() would always hit the first occurrence, which
-            # may be the wrong element if two params share the same hex value.
-            #
-            # Fix: narrow the search to the parent element's text block.
-            # e.g. ".//osc1/volume" → search only inside <osc1>…</osc1>.
-            # For top-level paths (no parent) fall back to a full-document search.
+            # Read raw text now — needed for passes 2 and 3 regardless of
+            # whether there are hex replacements.
             text, enc = _read_xml(self._current_synth.file_path)
             text_before = text
+
+            # Pass 2: parent-scoped hex replacement.
+            #
+            # Tags like <volume>, <attack>, <decay> appear multiple times in a
+            # synth file. A bare str.replace() would always hit the first
+            # occurrence.  Fix: narrow the search to the parent element's block.
             for old_hex, new_hex, tag, xpath in replacements:
                 path_parts = [p for p in xpath.replace(".", "").split("/") if p]
                 replaced = False
                 if len(path_parts) >= 2:
                     parent_tag = path_parts[-2]
-                    # Match either <parent> or <parent attr=…>
                     ps = -1
                     for opener in (f"<{parent_tag}>", f"<{parent_tag} "):
                         ps = text.find(opener)
@@ -546,8 +548,59 @@ class SynthEditorModule(QWidget):
                                 text = text[:ps] + new_block + text[pe:]
                                 replaced = True
                 if not replaced:
-                    # Fallback: unique top-level element or parent block not found
                     text = text.replace(f">{old_hex}</{tag}>", f">{new_hex}</{tag}>", 1)
+
+            # Pass 3: combobox replacements (OSC types, LFO shape, filter mode).
+            #
+            # OSC type — Deluge uses two formats across firmware versions:
+            #   Attribute: <osc1 type="saw" …>
+            #   Element:   <osc1><type>saw</type></osc1>
+            # We try both within the parent block.
+            for parent_tag, new_type in [("osc1", self._osc1_type.currentText()),
+                                          ("osc2", self._osc2_type.currentText())]:
+                ps = text.find(f"<{parent_tag}")
+                pe_marker = f"</{parent_tag}>"
+                pe = text.find(pe_marker, ps if ps != -1 else 0)
+                if ps == -1 or pe == -1:
+                    continue
+                pe += len(pe_marker)
+                block = text[ps:pe]
+                new_block = re.sub(r'\btype="[^"]*"', f'type="{new_type}"', block, count=1)
+                if new_block == block:
+                    new_block = re.sub(
+                        r'<type>[^<]*</type>', f'<type>{new_type}</type>', block, count=1
+                    )
+                if new_block != block:
+                    text = text[:ps] + new_block + text[pe:]
+
+            # LFO1 shape — always stored as <shape>…</shape> child element.
+            new_shape = self._lfo1_shape.currentText()
+            ps = text.find("<lfo1")
+            if ps != -1:
+                pe_marker = "</lfo1>"
+                pe = text.find(pe_marker, ps)
+                if pe != -1:
+                    pe += len(pe_marker)
+                    block = text[ps:pe]
+                    new_block = re.sub(
+                        r'<shape>[^<]*</shape>', f'<shape>{new_shape}</shape>', block, count=1
+                    )
+                    if new_block != block:
+                        text = text[:ps] + new_block + text[pe:]
+
+            # Filter mode — stored as mode attribute on <lpf> or <hpf>.
+            _filter_mode_map = {"lpf12": "0", "lpf24": "1", "hpf12": "2", "hpf24": "3"}
+            new_mode = _filter_mode_map.get(self._filter_type.currentText())
+            if new_mode is not None:
+                text = re.sub(
+                    r'(<(?:lpf|hpf)\b[^>]*)mode="[0-9]+"',
+                    lambda m: m.group(1) + f'mode="{new_mode}"',
+                    text,
+                )
+
+            if text == text_before:
+                self._status.setText(f"ℹ  Keine Änderungen: {self._current_synth.name}")
+                return
 
             _write_xml(self._current_synth.file_path, text, enc)
             self._status.setText(f"✅  Gespeichert: {self._current_synth.name}")
