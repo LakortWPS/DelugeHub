@@ -1,7 +1,7 @@
 # DelugeHub — Projektstand
 
-**Stand:** 2026-04-16  
-**Version:** 2.0.0 (Branch: `main`)
+**Stand:** 2026-06-02  
+**Version:** 2.0.4 (Branch: `main`)
 
 ---
 
@@ -51,34 +51,25 @@ DelugeHub/
 
 | Hash | Branch | Beschreibung |
 |------|--------|-------------|
-| `a78ead6` | `main` | chore: bump version to 2.0.0 (staging system major release) |
-| `19855ff` | `main` | feat: backup supports exclude_samples option |
-| `129ee85` | `main` | feat: batch_hub uses StagingStore |
-| `1d1dee9` | `main` | feat: synth_editor uses StagingStore |
-| `f01b1ac` | `main` | feat: kit_manager uses StagingStore |
-| `c0da3ca` | `main` | feat: song_manager uses StagingStore |
-| `4c7fa9d` | `main` | feat: add StagingStore to MainWindow + status bar badge |
-| `8729152` | `main` | feat: add PendingPanel widget |
-| `f27a17e` | `main` | feat: add StagingStore core module |
+| `f710872` | `main` | v2.0.4 — bugfix release |
+| `541007e` | `main` | fix: synth_editor parent-block replacement, inno warnings, gitignore |
+| `18a9e89` | `main` | v2.0.3 — bugfix release |
+| `c86d116` | `main` | merge: integrate remote changes |
+| `e3530d4` | `main` | chore: update gitignore to exclude Deluge SD card files |
 
 ---
 
 ## Aktueller Status
 
-### ✅ v2.0.0 Staging-System implementiert (2026-04-16)
+### ✅ v2.0.4 aktueller Stand (2026-06-02)
 
-Alle destruktiven Operationen (XML-Edit, Rename, Delete) werden jetzt gepuffert und erst auf expliziten Nutzerbefehl auf Disk geschrieben.
-
-| Komponente | Status |
+| Feature | Status |
 |---|---|
-| `app/core/staging.py` — StagingStore + PendingChange | ✅ NEU |
-| `app/widgets/pending_panel.py` — PendingPanel Widget | ✅ NEU |
-| `app/main_window.py` — Staging-Badge + Alle-Speichern | ✅ geändert |
-| `app/modules/song_manager.py` | ✅ geändert |
-| `app/modules/kit_manager.py` | ✅ geändert |
-| `app/modules/synth_editor.py` | ✅ geändert |
-| `app/modules/batch_hub.py` — QThread-safe via Signal | ✅ geändert |
-| `app/core/backup.py` + `backup_sync.py` — exclude_samples | ✅ geändert |
+| Staging-System (`StagingStore` + `PendingPanel`) | ✅ seit v2.0.0 |
+| Undo/Redo History (`ActionHistory`) | ✅ aktiv — `main_window.py` initialisiert und verteilt an alle Module |
+| Volume-Utils zentralisiert (`core/volume_utils.py`) | ✅ seit v2.0.3 |
+| Synth Editor — parent-block-anchored replacement | ✅ seit v2.0.4 |
+| Line-Ending-Normalisierung | ✅ bereinigt (v2.0.4) |
 
 ### Staging-Architektur
 
@@ -88,17 +79,19 @@ Alle destruktiven Operationen (XML-Edit, Rename, Delete) werden jetzt gepuffert 
 - Beim Speichern: Original überschreiben ODER in anderen Ordner exportieren
 - Beim App-Start mit SD-Card: Restore-Dialog wenn Session-Pending vorhanden
 
-### Line-Ending-Drift (noch offen)
-Mehrere Dateien auf `main` zeigen `M`-Status (CRLF↔LF), kein inhaltlicher Code-Unterschied. Noch nicht bereinigt.
+### Undo/Redo-System
+
+- `app/core/history.py` — `ActionHistory` (30-Step Undo/Redo Stack)
+- Wird in `main_window.py:88` initialisiert und via `set_history()` an alle Module übergeben
+- Module mit Undo-Support: `kit_manager`, `synth_editor`, `sample_manager`, `lost_sample_finder`
+- `if self._history:` Guards sind **intentional** — defensiv für den Zeitraum vor `set_history()`
 
 ---
 
 ## Offene Punkte / Nächste Schritte
 
-1. **Line-Endings bereinigen** — `.gitattributes` mit `* text=auto` + `git add --renormalize .`
-2. **Minor/Code-Quality (aufgeschoben):**
-   - History-System nie initialisiert — toter Code in allen Modulen (`_history` immer `None`)
-   - Volume-Helper (`_vol_to_display` / `_display_to_vol`) dupliziert in `kit_manager` + `batch_hub`
+1. **Minor/Code-Quality:**
+   - `kit_manager.py:663-664` — `_vol_to_display`/`_display_to_vol` als `staticmethod`-Wrapper könnten durch direkte Aufrufe ersetzt werden (vgl. `batch_hub.py` Import-Alias-Pattern)
 
 ---
 
@@ -107,7 +100,7 @@ Mehrere Dateien auf `main` zeigen `M`-Status (CRLF↔LF), kein inhaltlicher Code
 - **XML lesen:** immer `_parse_xml_robust(path)` aus `core/xml_parser.py` — niemals `ET.parse()`
 - **Dateien lesen/schreiben:** immer `_read_xml(path)` / `_write_xml(path, content, enc)` aus `core/file_ops.py`
 - **Glob auf Linux:** immer beide Patterns `*.XML` + `*.xml` sammeln
-- `core/history.py` existiert nicht — alle `if self._history:` Guards sind toter Code
+- `core/history.py` — `ActionHistory`-Klasse, initialisiert in `main_window.py`, via `set_history()` an Module verteilt
 
 ## Skills & Workflows
 
