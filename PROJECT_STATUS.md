@@ -1,7 +1,7 @@
 # DelugeHub — Projektstand
 
-**Stand:** 2026-06-02  
-**Version:** 2.0.4 (Branch: `main`)
+**Stand:** 2026-06-05  
+**Version:** 2.0.5 (Branch: `main`)
 
 ---
 
@@ -51,11 +51,11 @@ DelugeHub/
 
 | Hash | Branch | Beschreibung |
 |------|--------|-------------|
+| `24aa870` | `main` | fix(batch_hub): remove synth normalize no-op, extract XML helper |
+| `0a1dee3` | `main` | fix(synth_editor): ET.parse → _parse_xml_robust, combobox saves |
+| `b5165e3` | `main` | refactor: clean up song_manager volume helpers and dead history |
+| `7b69de1` | `main` | refactor: replace staticmethod wrappers in kit_manager |
 | `f710872` | `main` | v2.0.4 — bugfix release |
-| `541007e` | `main` | fix: synth_editor parent-block replacement, inno warnings, gitignore |
-| `18a9e89` | `main` | v2.0.3 — bugfix release |
-| `c86d116` | `main` | merge: integrate remote changes |
-| `e3530d4` | `main` | chore: update gitignore to exclude Deluge SD card files |
 
 ---
 
@@ -70,6 +70,8 @@ DelugeHub/
 | Volume-Utils zentralisiert (`core/volume_utils.py`) | ✅ seit v2.0.3 |
 | Synth Editor — parent-block-anchored replacement | ✅ seit v2.0.4 |
 | Line-Ending-Normalisierung | ✅ bereinigt (v2.0.4) |
+| Synth Editor — OSC/LFO/Filter-Mode Speichern | ✅ seit v2.0.5 |
+| Redundante `staticmethod`-Wrapper entfernt | ✅ seit v2.0.5 |
 
 ### Staging-Architektur
 

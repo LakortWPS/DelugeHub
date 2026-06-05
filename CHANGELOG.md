@@ -5,6 +5,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.5] — 2026-06-05
+
+### Fixed
+- **Synth Editor — OSC type / LFO shape / filter mode not saved**: `_save_params` only wrote hex slider values; changes to the OSC type, LFO shape and filter mode comboboxes were silently discarded. Added pass 3 to handle both Deluge firmware formats (attribute and child-element) for these fields.
+- **Synth Editor — `ET.parse()` replaced with `_parse_xml_robust()`**: `_load_params` and `_save_params` used the standard parser directly, causing silent failures on malformed Deluge XMLs (BOM, invalid characters, missing closing tags). Both now use the robust parser with lxml recovery.
+- **Batch Hub — "Volumes normalisieren" silent no-op for Synths**: The option was listed in the Synths tab but `_do_normalize` only processes `<soundSources>` (a Kit-only structure). Removed from the Synths tab; Kits are unaffected.
+- **Batch Hub — import skipped count not shown**: Files already present at the destination were silently skipped; the status now shows how many were skipped.
+
+### Refactored
+- **kit_manager / song_manager — redundant `staticmethod` wrappers removed**: `_vol_to_display` / `_display_to_vol` class-level aliases replaced with direct calls to the already-imported functions from `core/volume_utils`, consistent with `batch_hub.py`'s import-alias pattern.
+- **song_manager — dead history interface removed**: `set_history` / `_history` were present but never used (all ops go through `StagingStore`); removed.
+- **batch_hub — XML file collection deduplicated**: `_validate_all_xmls` and `_global_replace` contained identical loops; extracted into `_collect_xml_files()` helper.
+- **synth_editor — `ParamSlider.get_value()` added**: symmetric counterpart to the existing `set_value()`; `_save_params` no longer accesses `._slider.value()` as a private attribute.
+
+---
+
 ## [2.0.4] — 2026-05-20
 
 ### Fixed
