@@ -337,7 +337,7 @@ class BatchHubModule(QWidget):
             "Batch Exportieren",
             "Batch Löschen",
         ])
-        if content_type in ("kits", "synths"):
+        if content_type == "kits":
             op_combo.addItem("Volumes normalisieren")
         if content_type == "kits":
             op_combo.addItem("Kit-Master begrenzen")
@@ -681,17 +681,22 @@ class BatchHubModule(QWidget):
         audio_exts = {".wav", ".aif", ".aiff", ".mp3", ".flac"}
         files = [f for f in src.rglob("*") if f.is_file() and f.suffix.lower() in audio_exts]
 
-        success = 0
+        success = skipped = 0
         for f in files:
             try:
                 dest = dest_root / f.name
-                if not dest.exists():
+                if dest.exists():
+                    skipped += 1
+                else:
                     shutil.copy2(str(f), str(dest))
                     success += 1
             except Exception:
                 pass
 
-        self._status.setText(f"✅  {success}/{len(files)} Samples importiert nach {dest_subpath}")
+        msg = f"✅  {success}/{len(files)} Samples importiert nach {dest_subpath}"
+        if skipped:
+            msg += f"  |  {skipped} bereits vorhanden (übersprungen)"
+        self._status.setText(msg)
         if success:
             self.request_rescan.emit()
 
@@ -754,25 +759,33 @@ class BatchHubModule(QWidget):
         self._status.setText(f"🗑  {deleted} ungenutzte Samples gelöscht.")
         self.request_rescan.emit()
 
+    def _collect_xml_files(self) -> list[Path]:
+        """Return all XML files under SONGS/KITS/SYNTHS, deduplicated by resolved path."""
+        if not self._index:
+            return []
+        seen = set()
+        result = []
+        for folder in ("SONGS", "KITS", "SYNTHS"):
+            d = self._index.root_path / folder
+            if not d.exists():
+                continue
+            for f in d.rglob("*"):
+                if f.is_file() and f.suffix.lower() == ".xml":
+                    key = f.resolve()
+                    if key not in seen:
+                        seen.add(key)
+                        result.append(f)
+        return result
+
     def _validate_all_xmls(self):
         if not self._index:
             return
         import xml.etree.ElementTree as ET
 
         errors = []
-        total = 0
-        for folder in ("SONGS", "KITS", "SYNTHS"):
-            d = self._index.root_path / folder
-            if not d.exists():
-                continue
-            # Beide Schreibweisen abdecken, deduplizieren (case-insensitiv auf Windows/FAT32)
-            seen_xml = set()
-            xml_files = []
-            for f in d.rglob("*"):
-                if f.is_file() and f.suffix.lower() == ".xml" and f not in seen_xml:
-                    seen_xml.add(f)
-                    xml_files.append(f)
-            for xml in xml_files:
+        xml_files = self._collect_xml_files()
+        total = len(xml_files)
+        for xml in xml_files:
                 total += 1
                 try:
                     ET.parse(xml)
@@ -806,21 +819,11 @@ class BatchHubModule(QWidget):
         if reply != QMessageBox.Yes:
             return
 
+        from ..core.file_ops import update_xml_path
         modified = 0
-        for folder in ("SONGS", "KITS", "SYNTHS"):
-            d = self._index.root_path / folder
-            if not d.exists():
-                continue
-            seen_xml2 = set()
-            xml_files = []
-            for f in d.rglob("*"):
-                if f.is_file() and f.suffix.lower() == ".xml" and f not in seen_xml2:
-                    seen_xml2.add(f)
-                    xml_files.append(f)
-            for xml in xml_files:
-                from ..core.file_ops import update_xml_path
-                if update_xml_path(xml, find_text, replace_text):
-                    modified += 1
+        for xml in self._collect_xml_files():
+            if update_xml_path(xml, find_text, replace_text):
+                modified += 1
 
         self._status.setText(f"✅  {modified} XML-Dateien aktualisiert.")
         if modified:

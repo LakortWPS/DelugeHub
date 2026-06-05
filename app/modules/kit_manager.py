@@ -659,10 +659,6 @@ class KitManagerModule(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Fehler", str(e))
 
-    # ── Volume-Cap Helpers (delegiert an core.volume_utils) ───────────────
-    _vol_to_display = staticmethod(vol_to_display)
-    _display_to_vol = staticmethod(display_to_vol)
-
     def _cap_kit_master(self):
         kit = self._selected_kit()
         if not kit:
@@ -701,14 +697,14 @@ class KitManagerModule(QWidget):
             self._status.setText("ℹ  Kein Volume-Wert im Kit-Master gefunden.")
             return
 
-        current_display = self._vol_to_display(vol_str)
+        current_display = vol_to_display(vol_str)
         if current_display <= threshold:
             self._status.setText(
                 f"ℹ  Kit-Master liegt bei {current_display:.1f}/50 — kein Cap nötig."
             )
             return
 
-        new_hex = self._display_to_vol(threshold)
+        new_hex = display_to_vol(threshold)
         text, enc = _read_xml(kit.file_path)
 
         sources_pos = text.find('<soundSources>')
@@ -786,8 +782,8 @@ class KitManagerModule(QWidget):
                 if vol_elem is not None:
                     vol_str = (vol_elem.text or "").strip()
                     vol_format = "elem"
-            if vol_str and self._vol_to_display(vol_str) > threshold:
-                caps.append((vol_str, self._display_to_vol(threshold), vol_format))
+            if vol_str and vol_to_display(vol_str) > threshold:
+                caps.append((vol_str, display_to_vol(threshold), vol_format))
 
         if not caps:
             self._status.setText(

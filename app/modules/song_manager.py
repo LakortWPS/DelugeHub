@@ -37,7 +37,6 @@ class SongManagerModule(QWidget):
         super().__init__()
         self._index: Optional[SDCardIndex] = None
         self._songs: list[Song] = []
-        self._history = None
         self._staging: Optional[StagingStore] = None
         self._build_ui()
 
@@ -197,9 +196,6 @@ class SongManagerModule(QWidget):
         if obj:
             l.setObjectName(obj)
         return l
-
-    def set_history(self, history):
-        self._history = history
 
     def set_staging(self, staging: StagingStore):
         self._staging = staging
@@ -407,10 +403,6 @@ class SongManagerModule(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Export-Fehler", str(e))
 
-    # ── Volume-Cap Helpers (delegiert an core.volume_utils) ───────────────
-    _vol_to_display = staticmethod(vol_to_display)
-    _display_to_vol = staticmethod(display_to_vol)
-
     def _cap_song_master(self):
         song = self._selected_song()
         if not song:
@@ -449,14 +441,14 @@ class SongManagerModule(QWidget):
             self._status.setText("ℹ  Kein Volume-Wert in songParams gefunden.")
             return
 
-        current_display = self._vol_to_display(vol_str)
+        current_display = vol_to_display(vol_str)
         if current_display <= threshold:
             self._status.setText(
                 f"ℹ  Song-Master liegt bei {current_display:.1f}/50 — kein Cap nötig."
             )
             return
 
-        new_hex = self._display_to_vol(threshold)
+        new_hex = display_to_vol(threshold)
         text, enc = _read_xml(song.file_path)
 
         clips_pos = text.find('<sessionClips>')
@@ -515,9 +507,6 @@ class SongManagerModule(QWidget):
         from ..core.file_ops import _read_xml, _write_xml
 
         text, enc = _read_xml(song.file_path)
-
-        vol_to_display = self._vol_to_display
-        display_to_vol = self._display_to_vol
 
         def cap_volume(m):
             hex_str = m.group(2)
