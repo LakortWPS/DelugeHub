@@ -29,7 +29,7 @@ class RestoreWorker(QThread):
     error = Signal(str)
 
     def __init__(self, zip_path: Path, dest_path: Path,
-                 files: list | None = None):
+                 files: Optional[list] = None):
         super().__init__()
         self.zip_path = zip_path
         self.dest_path = dest_path

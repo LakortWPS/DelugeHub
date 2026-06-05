@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 
+from typing import Optional
+
 from ..core.models import SDCardIndex
 
 
@@ -68,7 +70,7 @@ class DashboardModule(QWidget):
 
     def __init__(self):
         super().__init__()
-        self._index: SDCardIndex | None = None
+        self._index: Optional[SDCardIndex] = None
         self._build_ui()
 
     def _build_ui(self):
