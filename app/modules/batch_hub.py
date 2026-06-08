@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
     QAbstractItemView, QFileDialog, QInputDialog, QMessageBox,
     QComboBox, QLineEdit, QCheckBox, QProgressBar, QSplitter,
-    QScrollArea, QGroupBox, QTabWidget
+    QScrollArea, QGroupBox, QTabWidget, QSpinBox
 )
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
@@ -21,6 +21,47 @@ from PySide6.QtGui import QColor
 from ..core.models import SDCardIndex
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import vol_to_display as _vol_to_display, display_to_vol as _display_to_vol
+
+# ── Rename-Schema Schemas ──────────────────────────────────────────────────
+RENAME_SCHEMAS = [
+    ("Deluge-Style  (A001, A002 … B001 …)", "deluge"),
+    ("Kompakt       (A1, A2 … B1 …)",       "compact"),
+    ("Freies Pattern  ({name}, {index} …)", "pattern"),
+    ("Prefix + Nummer  (PREFIX001 …)",       "prefix_num"),
+    ("Name + Affix   (PREFIX_{name}_SUFFIX)", "name_affix"),
+]
+
+
+def _compute_rename(schema: str, extra: str, name: str, abs_index: int) -> str:
+    """Berechnet den neuen Dateinamen (ohne Extension).
+
+    abs_index: 0-basierter Index (start_index bereits eingerechnet).
+    """
+    if schema == "deluge":
+        letter = chr(ord("A") + abs_index // 9)
+        num = (abs_index % 9) + 1
+        return f"{letter}{num:03d}"
+    elif schema == "compact":
+        letter = chr(ord("A") + abs_index // 9)
+        num = (abs_index % 9) + 1
+        return f"{letter}{num}"
+    elif schema == "pattern":
+        res = extra if extra.strip() else "{name}"
+        res = res.replace("{name}", name)
+        res = res.replace("{index}", str(abs_index + 1).zfill(3))
+        res = res.replace("{INDEX}", str(abs_index + 1))
+        return res
+    elif schema == "prefix_num":
+        prefix = extra.strip() or "FILE"
+        return f"{prefix}{str(abs_index + 1).zfill(3)}"
+    elif schema == "name_affix":
+        sep = "|||"
+        if sep in extra:
+            pfx, sfx = extra.split(sep, 1)
+        else:
+            pfx, sfx = extra, ""
+        return f"{pfx}{name}{sfx}"
+    return name
 
 
 class BatchWorker(QThread):
@@ -87,12 +128,13 @@ class BatchWorker(QThread):
         return {"success": success, "failed": failed, "total": total}, pending
 
     def _do_rename(self, item, index: int) -> Optional[PendingChange]:
-        pattern: str = self.params.get("pattern", "{name}")
-        new_name = pattern.replace("{name}", item.name)
-        new_name = new_name.replace("{index}", str(index + 1).zfill(3))
-        new_name = new_name.replace("{INDEX}", str(index + 1))
-        if not new_name.lower().endswith(".xml"):
-            new_name += ".XML"
+        schema: str = self.params.get("schema", "pattern")
+        extra: str  = self.params.get("extra", "{name}")
+        start: int  = self.params.get("start_index", 1)
+        abs_index   = (start - 1) + index
+
+        stem = _compute_rename(schema, extra, item.name, abs_index)
+        new_name = stem if stem.lower().endswith(".xml") else stem + ".XML"
         new_path = item.file_path.parent / new_name
         if not new_path.exists() and new_name != item.file_path.name:
             return PendingChange(
@@ -337,7 +379,7 @@ class BatchHubModule(QWidget):
             "Batch Exportieren",
             "Batch Löschen",
         ])
-        if content_type == "kits":
+        if content_type in ("kits", "synths"):
             op_combo.addItem("Volumes normalisieren")
         if content_type == "kits":
             op_combo.addItem("Kit-Master begrenzen")
@@ -350,34 +392,140 @@ class BatchHubModule(QWidget):
         op_row.addStretch()
         ops_layout.addLayout(op_row)
 
-        pattern_row = QHBoxLayout()
-        pattern_lbl = QLabel("Muster:")
-        pattern_lbl.setFixedWidth(100)
-        pattern_edit = QLineEdit("{name}")
-        pattern_edit.setToolTip("{name} = original, {index} = 001,002…, {INDEX} = 1,2…")
-        pattern_hint = QLabel("Variablen: {name}, {index}, {INDEX}")
-        pattern_hint.setStyleSheet("color: #888888; font-size: 11px;")
-        pattern_row.addWidget(pattern_lbl)
-        pattern_row.addWidget(pattern_edit)
-        pattern_row.addWidget(pattern_hint)
-        ops_layout.addLayout(pattern_row)
+        # ── Rename-Controls (nur bei "Batch Umbenennen" sichtbar) ──────────
+        rename_frame = QFrame()
+        rename_layout = QVBoxLayout(rename_frame)
+        rename_layout.setContentsMargins(0, 4, 0, 0)
+        rename_layout.setSpacing(6)
 
-        def toggle_pattern(idx):
-            visible = op_combo.currentText() == "Batch Umbenennen"
-            pattern_edit.setVisible(visible)
-            pattern_hint.setVisible(visible)
+        # Zeile 1: Schema-Dropdown + Startindex
+        schema_row = QHBoxLayout()
+        schema_lbl = QLabel("Schema:")
+        schema_lbl.setFixedWidth(100)
+        schema_combo = QComboBox()
+        for label, key in RENAME_SCHEMAS:
+            schema_combo.addItem(label, key)
+        start_lbl = QLabel("Start:")
+        start_lbl.setFixedWidth(36)
+        start_spin = QSpinBox()
+        start_spin.setRange(1, 9999)
+        start_spin.setValue(1)
+        start_spin.setFixedWidth(68)
+        schema_row.addWidget(schema_lbl)
+        schema_row.addWidget(schema_combo, 1)
+        schema_row.addSpacing(12)
+        schema_row.addWidget(start_lbl)
+        schema_row.addWidget(start_spin)
+        rename_layout.addLayout(schema_row)
 
-        op_combo.currentIndexChanged.connect(toggle_pattern)
-        toggle_pattern(0)
+        # Zeile 2: Kontextsensitives Extra-Feld (Schema 3+4)
+        extra_row = QHBoxLayout()
+        extra_lbl = QLabel("Wert:")
+        extra_lbl.setFixedWidth(100)
+        extra_edit = QLineEdit()
+        extra_hint = QLabel("")
+        extra_hint.setStyleSheet("color: #888888; font-size: 11px;")
+        extra_row.addWidget(extra_lbl)
+        extra_row.addWidget(extra_edit, 1)
+        extra_row.addWidget(extra_hint)
+        rename_layout.addLayout(extra_row)
+
+        # Zeile 3: Prefix/Suffix für Schema 5
+        affix_row = QHBoxLayout()
+        affix_lbl = QLabel("Affix:")
+        affix_lbl.setFixedWidth(100)
+        prefix_edit = QLineEdit()
+        prefix_edit.setPlaceholderText("Prefix…")
+        affix_mid = QLabel("{name}")
+        affix_mid.setStyleSheet("color: #888888; font-size: 11px; padding: 0 6px;")
+        suffix_edit = QLineEdit()
+        suffix_edit.setPlaceholderText("Suffix…")
+        affix_row.addWidget(affix_lbl)
+        affix_row.addWidget(prefix_edit, 1)
+        affix_row.addWidget(affix_mid)
+        affix_row.addWidget(suffix_edit, 1)
+        rename_layout.addLayout(affix_row)
+
+        ops_layout.addWidget(rename_frame)
+
+        def _get_schema_key():
+            return schema_combo.currentData()
+
+        def _get_extra():
+            key = _get_schema_key()
+            if key == "name_affix":
+                return f"{prefix_edit.text()}|||{suffix_edit.text()}"
+            return extra_edit.text()
+
+        def _update_rename_ui():
+            key = _get_schema_key()
+            needs_extra = key in ("pattern", "prefix_num")
+            needs_affix = key == "name_affix"
+            extra_lbl.setVisible(needs_extra)
+            extra_edit.setVisible(needs_extra)
+            extra_hint.setVisible(needs_extra)
+            affix_lbl.setVisible(needs_affix)
+            prefix_edit.setVisible(needs_affix)
+            affix_mid.setVisible(needs_affix)
+            suffix_edit.setVisible(needs_affix)
+            if key == "pattern":
+                extra_edit.setPlaceholderText("{name}_{index}")
+                extra_hint.setText("Vars: {name}  {index}  {INDEX}")
+            elif key == "prefix_num":
+                extra_edit.setPlaceholderText("SONG")
+                extra_hint.setText("Ergebnis: SONG001, SONG002 …")
+            _update_preview()
+
+        def _update_preview():
+            is_rename = op_combo.currentText() == "Batch Umbenennen"
+            rename_frame.setVisible(is_rename)
+            item_table.setColumnHidden(2, not is_rename)
+            if not is_rename:
+                return
+            schema = _get_schema_key()
+            extra  = _get_extra()
+            start  = start_spin.value()
+            for row in range(item_table.rowCount()):
+                data_cell = item_table.item(row, 1)
+                if not data_cell:
+                    continue
+                itm = data_cell.data(Qt.UserRole)
+                abs_idx = (start - 1) + row
+                stem = _compute_rename(schema, extra, itm.name, abs_idx)
+                new_name = stem if stem.lower().endswith(".xml") else stem + ".XML"
+                prev_cell = item_table.item(row, 2)
+                if prev_cell is None:
+                    prev_cell = QTableWidgetItem()
+                    item_table.setItem(row, 2, prev_cell)
+                prev_cell.setText(new_name)
+                color = QColor("#F39C12") if new_name != itm.file_path.name else QColor("#888888")
+                prev_cell.setForeground(color)
+
+        op_combo.currentIndexChanged.connect(_update_preview)
+        schema_combo.currentIndexChanged.connect(_update_rename_ui)
+        start_spin.valueChanged.connect(_update_preview)
+        extra_edit.textChanged.connect(_update_preview)
+        prefix_edit.textChanged.connect(_update_preview)
+        suffix_edit.textChanged.connect(_update_preview)
+
+        _update_rename_ui()   # Initialzustand setzen
         layout.addWidget(ops_frame)
 
-        item_table = QTableWidget(0, 2)
-        item_table.setHorizontalHeaderLabels(["✓", "Name"])
+        # Speichere Referenzen für run_batch
+        widget._schema_combo  = schema_combo
+        widget._start_spin    = start_spin
+        widget._get_extra     = _get_extra
+        widget._update_preview = _update_preview
+
+        item_table = QTableWidget(0, 3)
+        item_table.setHorizontalHeaderLabels(["✓", "Name", "Vorschau"])
         item_table.verticalHeader().setVisible(False)
         hv = item_table.horizontalHeader()
         hv.setSectionResizeMode(0, QHeaderView.Fixed)
         hv.setSectionResizeMode(1, QHeaderView.Stretch)
+        hv.setSectionResizeMode(2, QHeaderView.Stretch)
         item_table.setColumnWidth(0, 30)
+        item_table.setColumnHidden(2, False)
         item_table.setAlternatingRowColors(True)
         layout.addWidget(item_table, 1)
 
@@ -418,7 +566,12 @@ class BatchHubModule(QWidget):
             if not selected:
                 QMessageBox.information(widget, "Info", "Keine Einträge ausgewählt.")
                 return
-            self._run_batch(selected, op_combo.currentText(), pattern_edit.text())
+            rename_params = {
+                "schema":      widget._schema_combo.currentData(),
+                "extra":       widget._get_extra(),
+                "start_index": widget._start_spin.value(),
+            }
+            self._run_batch(selected, op_combo.currentText(), rename_params=rename_params)
 
         sel_all_btn.clicked.connect(sel_all)
         sel_none_btn.clicked.connect(sel_none)
@@ -582,8 +735,12 @@ class BatchHubModule(QWidget):
                     name_item = QTableWidgetItem(item.name)
                     name_item.setData(Qt.UserRole, item)
                     table.setItem(row, 1, name_item)
+                    table.setItem(row, 2, QTableWidgetItem(""))
+                # Preview nach Neubefüllung aktualisieren
+                if hasattr(tab, "_update_preview"):
+                    tab._update_preview()
 
-    def _run_batch(self, items: list, operation_text: str, pattern: str = ""):
+    def _run_batch(self, items: list, operation_text: str, pattern: str = "", rename_params: dict = None):
         if not items:
             return
 
@@ -600,7 +757,7 @@ class BatchHubModule(QWidget):
         if not op:
             return
 
-        params = {"pattern": pattern}
+        params = rename_params.copy() if (op == "rename" and rename_params) else {"pattern": pattern}
 
         if op == "delete":
             reply = QMessageBox.warning(
@@ -661,170 +818,3 @@ class BatchHubModule(QWidget):
                             c.file_path.unlink(missing_ok=True)
                     except Exception:
                         pass
-            self._status.setText(
-                f"✅  {result['success']}/{result['total']} erfolgreich"
-                + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
-            )
-            self.request_rescan.emit()
-
-    def _batch_import(self, source_folder: str, dest_subpath: str):
-        if not self._index or not source_folder:
-            return
-        src = Path(source_folder)
-        if not src.exists():
-            QMessageBox.warning(self, "Fehler", "Quell-Ordner existiert nicht.")
-            return
-
-        dest_root = self._index.root_path / dest_subpath.replace("\\", "/").strip("/")
-        dest_root.mkdir(parents=True, exist_ok=True)
-
-        audio_exts = {".wav", ".aif", ".aiff", ".mp3", ".flac"}
-        files = [f for f in src.rglob("*") if f.is_file() and f.suffix.lower() in audio_exts]
-
-        success = skipped = 0
-        for f in files:
-            try:
-                dest = dest_root / f.name
-                if dest.exists():
-                    skipped += 1
-                else:
-                    shutil.copy2(str(f), str(dest))
-                    success += 1
-            except Exception:
-                pass
-
-        msg = f"✅  {success}/{len(files)} Samples importiert nach {dest_subpath}"
-        if skipped:
-            msg += f"  |  {skipped} bereits vorhanden (übersprungen)"
-        self._status.setText(msg)
-        if success:
-            self.request_rescan.emit()
-
-    def _batch_export_samples(self):
-        if not self._index:
-            return
-        dest, _ = QFileDialog.getSaveFileName(
-            self, "Samples exportieren", "samples_export.zip", "ZIP (*.zip)"
-        )
-        if not dest:
-            return
-
-        samples = self._index.samples
-        self._progress.setVisible(True)
-        total = len(samples)
-
-        try:
-            with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
-                for i, s in enumerate(samples):
-                    if s.file_path.exists():
-                        try:
-                            arcname = str(s.file_path.relative_to(self._index.root_path)).replace("\\", "/")
-                            zf.write(s.file_path, arcname)
-                        except Exception:
-                            pass
-                    self._progress.setValue(int((i + 1) / max(total, 1) * 100))
-
-            size_mb = Path(dest).stat().st_size / (1024 * 1024)
-            self._status.setText(f"✅  {total} Samples exportiert ({size_mb:.1f} MB)")
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
-        finally:
-            self._progress.setVisible(False)
-
-    def _delete_unused_samples(self):
-        if not self._index:
-            return
-        unused = self._index.unused_samples
-        if not unused:
-            QMessageBox.information(self, "Info", "Keine ungenutzten Samples gefunden.")
-            return
-
-        total_mb = sum(s.size_mb for s in unused)
-        reply = QMessageBox.warning(
-            self, "Ungenutzte löschen",
-            f"{len(unused)} ungenutzte Samples ({total_mb:.1f} MB) löschen?\n\nDiese Aktion kann nicht rükgängig gemacht werden!",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        deleted = 0
-        for s in unused:
-            try:
-                s.file_path.unlink()
-                deleted += 1
-            except Exception:
-                pass
-
-        self._status.setText(f"🗑  {deleted} ungenutzte Samples gelöscht.")
-        self.request_rescan.emit()
-
-    def _collect_xml_files(self) -> list[Path]:
-        """Return all XML files under SONGS/KITS/SYNTHS, deduplicated by resolved path."""
-        if not self._index:
-            return []
-        seen = set()
-        result = []
-        for folder in ("SONGS", "KITS", "SYNTHS"):
-            d = self._index.root_path / folder
-            if not d.exists():
-                continue
-            for f in d.rglob("*"):
-                if f.is_file() and f.suffix.lower() == ".xml":
-                    key = f.resolve()
-                    if key not in seen:
-                        seen.add(key)
-                        result.append(f)
-        return result
-
-    def _validate_all_xmls(self):
-        if not self._index:
-            return
-        import xml.etree.ElementTree as ET
-
-        errors = []
-        xml_files = self._collect_xml_files()
-        total = len(xml_files)
-        for xml in xml_files:
-                total += 1
-                try:
-                    ET.parse(xml)
-                except ET.ParseError as e:
-                    errors.append(f"{xml.name}: {e}")
-
-        if errors:
-            self._validate_result.setText(
-                f"⚠  {len(errors)}/{total} XML-Fehler:\n" + "\n".join(errors[:10])
-            )
-            self._validate_result.setStyleSheet("color: #E74C3C; font-size: 12px;")
-        else:
-            self._validate_result.setText(f"✅  Alle {total} XML-Dateien sind valide.")
-            self._validate_result.setStyleSheet("color: #2ECC71; font-size: 12px;")
-
-    def _global_replace(self):
-        if not self._index:
-            return
-        find_text = self._find_edit.text()
-        replace_text = self._replace_edit.text()
-
-        if not find_text:
-            QMessageBox.warning(self, "Fehler", "Bitte Suchbegriff eingeben.")
-            return
-
-        reply = QMessageBox.question(
-            self, "Globales Ersetzen",
-            f"'{find_text}' → '{replace_text}'\nin ALLEN XML-Dateien ersetzen?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        from ..core.file_ops import update_xml_path
-        modified = 0
-        for xml in self._collect_xml_files():
-            if update_xml_path(xml, find_text, replace_text):
-                modified += 1
-
-        self._status.setText(f"✅  {modified} XML-Dateien aktualisiert.")
-        if modified:
-            self.request_rescan.emit()
