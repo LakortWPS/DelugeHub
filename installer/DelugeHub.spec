@@ -15,7 +15,7 @@ a = Analysis(
     ['../main.py'],
     pathex=['..'],
     binaries=binaries_pyside + binaries_lxml,
-    datas=datas_pyside + datas_lxml,
+    datas=datas_pyside + datas_lxml + [(ICON, '.')],
     hiddenimports=(
         hiddenimports_pyside +
         hiddenimports_lxml +
