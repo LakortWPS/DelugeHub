@@ -519,14 +519,7 @@ class BatchHubModule(QWidget):
         prefix_edit.textChanged.connect(_update_preview)
         suffix_edit.textChanged.connect(_update_preview)
 
-        _update_rename_ui()   # Initialzustand setzen
         layout.addWidget(ops_frame)
-
-        # Speichere Referenzen für run_batch
-        widget._schema_combo  = schema_combo
-        widget._start_spin    = start_spin
-        widget._get_extra     = _get_extra
-        widget._update_preview = _update_preview
 
         item_table = QTableWidget(0, 3)
         item_table.setHorizontalHeaderLabels(["✓", "Name", "Vorschau"])
@@ -539,6 +532,14 @@ class BatchHubModule(QWidget):
         item_table.setColumnHidden(2, False)
         item_table.setAlternatingRowColors(True)
         layout.addWidget(item_table, 1)
+
+        # Referenzen + Initialzustand (item_table muss vorher existieren)
+        widget._schema_combo   = schema_combo
+        widget._start_spin     = start_spin
+        widget._get_extra      = _get_extra
+        widget._update_preview = _update_preview
+        widget._item_table     = item_table
+        _update_rename_ui()   # Initialzustand setzen
 
         btn_row = QHBoxLayout()
         sel_all_btn = QPushButton("Alle auswählen")
@@ -819,6 +820,7 @@ class BatchHubModule(QWidget):
                 f"✅ {result['success']}/{result['total']}"
                 + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
             )
+            self.request_rescan.emit()
         else:
             # Fallback: direkt anwenden wenn kein Staging konfiguriert
             if pending:
@@ -837,4 +839,162 @@ class BatchHubModule(QWidget):
                 f"✅  {result['success']}/{result['total']} erfolgreich"
                 + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
             )
+            self.request_rescan.emit()
+
+    def _batch_import(self, source_folder: str, dest_subpath: str):
+        if not self._index or not source_folder:
+            return
+        src = Path(source_folder)
+        if not src.exists():
+            QMessageBox.warning(self, "Fehler", "Quell-Ordner existiert nicht.")
+            return
+
+        dest_root = self._index.root_path / dest_subpath.replace("\\", "/").strip("/")
+        dest_root.mkdir(parents=True, exist_ok=True)
+
+        audio_exts = {".wav", ".aif", ".aiff", ".mp3", ".flac"}
+        files = [f for f in src.rglob("*") if f.is_file() and f.suffix.lower() in audio_exts]
+
+        success = 0
+        for f in files:
+            try:
+                dest = dest_root / f.name
+                if not dest.exists():
+                    shutil.copy2(str(f), str(dest))
+                    success += 1
+            except Exception as e:
+                log.warning("Import fehlgeschlagen (%s): %s", f.name, e)
+
+        self._status.setText(f"\u2705  {success}/{len(files)} Samples importiert nach {dest_subpath}")
+        if success:
+            self.request_rescan.emit()
+
+    def _batch_export_samples(self):
+        if not self._index:
+            return
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Samples exportieren", "samples_export.zip", "ZIP (*.zip)"
+        )
+        if not dest:
+            return
+
+        samples = self._index.samples
+        self._progress.setVisible(True)
+        total = len(samples)
+
+        try:
+            with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+                for i, s in enumerate(samples):
+                    if s.file_path.exists():
+                        try:
+                            arcname = str(s.file_path.relative_to(self._index.root_path)).replace("\\", "/")
+                            zf.write(s.file_path, arcname)
+                        except Exception as e:
+                            log.warning("Sample nicht exportiert (%s): %s", s.file_path.name, e)
+                    self._progress.setValue(int((i + 1) / max(total, 1) * 100))
+
+            size_mb = Path(dest).stat().st_size / (1024 * 1024)
+            self._status.setText(f"\u2705  {total} Samples exportiert ({size_mb:.1f} MB)")
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", str(e))
+        finally:
+            self._progress.setVisible(False)
+
+    def _delete_unused_samples(self):
+        if not self._index:
+            return
+        unused = self._index.unused_samples
+        if not unused:
+            QMessageBox.information(self, "Info", "Keine ungenutzten Samples gefunden.")
+            return
+
+        total_mb = sum(s.size_mb for s in unused)
+        reply = QMessageBox.warning(
+            self, "Ungenutzte l\u00f6schen",
+            f"{len(unused)} ungenutzte Samples ({total_mb:.1f} MB) l\u00f6schen?\n\nDiese Aktion kann nicht r\u00fckg\u00e4ngig gemacht werden!",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        deleted = 0
+        for s in unused:
+            try:
+                s.file_path.unlink()
+                deleted += 1
+            except Exception as e:
+                log.warning("L\u00f6schen fehlgeschlagen (%s): %s", s.file_path.name, e)
+
+        self._status.setText(f"\U0001f5d1  {deleted} ungenutzte Samples gel\u00f6scht.")
+        self.request_rescan.emit()
+
+    def _validate_all_xmls(self):
+        if not self._index:
+            return
+        import xml.etree.ElementTree as ET
+
+        errors = []
+        total = 0
+        for folder in ("SONGS", "KITS", "SYNTHS"):
+            d = self._index.root_path / folder
+            if not d.exists():
+                continue
+            seen_xml = set()
+            xml_files = []
+            for f in d.rglob("*"):
+                if f.is_file() and f.suffix.lower() == ".xml" and f not in seen_xml:
+                    seen_xml.add(f)
+                    xml_files.append(f)
+            for xml in xml_files:
+                total += 1
+                try:
+                    ET.parse(xml)
+                except ET.ParseError as e:
+                    errors.append(f"{xml.name}: {e}")
+
+        if errors:
+            self._validate_result.setText(
+                f"\u26a0  {len(errors)}/{total} XML-Fehler:\n" + "\n".join(errors[:10])
+            )
+            self._validate_result.setStyleSheet("color: #E74C3C; font-size: 12px;")
+        else:
+            self._validate_result.setText(f"\u2705  Alle {total} XML-Dateien sind valide.")
+            self._validate_result.setStyleSheet("color: #2ECC71; font-size: 12px;")
+
+    def _global_replace(self):
+        if not self._index:
+            return
+        find_text = self._find_edit.text()
+        replace_text = self._replace_edit.text()
+
+        if not find_text:
+            QMessageBox.warning(self, "Fehler", "Bitte Suchbegriff eingeben.")
+            return
+
+        reply = QMessageBox.question(
+            self, "Globales Ersetzen",
+            f"\'{find_text}\' \u2192 \'{replace_text}\'\nin ALLEN XML-Dateien ersetzen?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        modified = 0
+        for folder in ("SONGS", "KITS", "SYNTHS"):
+            d = self._index.root_path / folder
+            if not d.exists():
+                continue
+            seen_xml2 = set()
+            xml_files = []
+            for f in d.rglob("*"):
+                if f.is_file() and f.suffix.lower() == ".xml" and f not in seen_xml2:
+                    seen_xml2.add(f)
+                    xml_files.append(f)
+            for xml in xml_files:
+                from ..core.file_ops import update_xml_path
+                if update_xml_path(xml, find_text, replace_text):
+                    modified += 1
+
+        self._status.setText(f"\u2705  {modified} XML-Dateien aktualisiert.")
+        if modified:
             self.request_rescan.emit()

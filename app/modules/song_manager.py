@@ -494,8 +494,61 @@ class SongManagerModule(QWidget):
             try:
                 _write_xml(song.file_path, new_text, enc)
                 self._status.setText(
-                    f"✅  Clip-Volumes auf max. {threshold}/50 begrenzt."
+                    f"✅  Song-Master auf max. {threshold}/50 begrenzt."
                 )
                 self.request_rescan.emit()
             except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
+
+    def _cap_clip_volumes(self):
+        """Begrenzt alle Clip-Volumes (kitParams/synthParams) im ausgewählten Song."""
+        import re
+        song = self._selected_song()
+        if not song:
+            return
+
+        threshold, ok = QInputDialog.getInt(
+            self, "Clip-Volumes begrenzen",
+            "Maximale Lautstärke für alle Clips (0 – 50):",
+            40, 0, 50, 1
+        )
+        if not ok:
+            return
+
+        from ..core.file_ops import _read_xml, _write_xml
+
+        text, enc = _read_xml(song.file_path)
+
+        def cap_vol(m):
+            if self._vol_to_display(m.group(2)) > threshold:
+                return m.group(1) + f'volume="{self._display_to_vol(threshold)}"'
+            return m.group(0)
+
+        new_text = re.sub(
+            r'(<(?:kitParams|synthParams)\b[^>]*)volume="(0x[0-9A-Fa-f]+)"',
+            cap_vol,
+            text,
+        )
+
+        if new_text == text:
+            self._status.setText("ℹ  Alle Clip-Volumes bereits im Limit.")
+            return
+
+        if self._staging:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=song.file_path,
+                source_module="song_manager",
+                new_content=new_text,
+                encoding=enc,
+            ))
+            self._status.setText(f"⏳  Vorgemerkt: Clip-Volumes → max. {threshold}/50.")
+            self._pending_panel.refresh()
+        else:
+            try:
+                _write_xml(song.file_path, new_text, enc)
+                self._status.setText(f"✅  Clip-Volumes auf max. {threshold}/50 begrenzt.")
+                self.request_rescan.emit()
+            except Exception as e:
+                log.warning("_cap_clip_volumes fehlgeschlagen: %s", e)
                 QMessageBox.warning(self, "Fehler", str(e))
