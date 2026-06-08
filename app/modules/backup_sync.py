@@ -270,6 +270,10 @@ class BackupSyncModule(QWidget):
         label = self._label_edit.text().strip() or f"Backup {datetime.now().strftime('%Y-%m-%d')}"
         notes = self._notes_edit.text().strip()
 
+        if self._worker and self._worker.isRunning():
+            self._status.setText("⚠  Backup läuft noch, bitte warten…")
+            return
+
         self._create_btn.setEnabled(False)
         self._progress.setVisible(True)
 
@@ -398,6 +402,10 @@ class BackupSyncModule(QWidget):
             if reply != QMessageBox.Yes:
                 return
             dest_path = self._sd_root
+
+        if self._restore_worker and self._restore_worker.isRunning():
+            self._status.setText("⚠  Restore läuft noch, bitte warten…")
+            return
 
         self._restore_btn.setEnabled(False)
         self._progress.setVisible(True)

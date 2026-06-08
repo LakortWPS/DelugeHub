@@ -2,6 +2,7 @@
 DelugeHub — Kit Manager Module
 Browse kits, view pad assignments, re-assign samples, normalize and cap volumes.
 """
+import logging
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -19,6 +20,8 @@ from PySide6.QtGui import QColor
 from ..core.models import SDCardIndex, Kit
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import vol_to_display, display_to_vol, vol_to_amp, amp_to_vol
+
+log = logging.getLogger(__name__)
 
 
 class PadWidget(QFrame):
@@ -566,7 +569,8 @@ class KitManagerModule(QWidget):
                 mono = np.mean(data, axis=1)
                 rms = float(np.sqrt(np.mean(mono ** 2)))
                 pad["rms"] = rms if rms > 1e-8 else None
-            except Exception:
+            except Exception as e:
+                log.debug("RMS-Berechnung fehlgeschlagen für Pad: %s", e)
                 pad["rms"] = None
 
         valid_pads = [p for p in pads if p["rms"] is not None]

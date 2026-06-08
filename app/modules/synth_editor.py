@@ -2,6 +2,7 @@
 DelugeHub — Synth Editor Module
 Browse synths, edit parameters, randomize, export/import.
 """
+import logging
 import random
 import re
 import shutil
@@ -20,6 +21,8 @@ from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Synth
 
+log = logging.getLogger(__name__)
+
 
 # ── Deluge value helpers ───────────────────────────────────────────────────
 def hex_to_norm(hex_str: str) -> float:
@@ -27,7 +30,8 @@ def hex_to_norm(hex_str: str) -> float:
     try:
         val = int(hex_str, 16) & 0xFFFFFFFF
         return val / 0xFFFFFFFF
-    except Exception:
+    except Exception as e:
+        log.debug("hex_to_norm parse fehlgeschlagen (%s): %s", hex_str, e)
         return 0.5
 
 

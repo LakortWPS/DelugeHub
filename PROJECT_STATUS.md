@@ -1,7 +1,7 @@
 # DelugeHub — Projektstand
 
-**Stand:** 2026-06-05  
-**Version:** 2.0.5 (Branch: `main`)
+**Stand:** 2026-06-08  
+**Version:** 2.2.0 (Branch: `main`)
 
 ---
 
@@ -51,27 +51,34 @@ DelugeHub/
 
 | Hash | Branch | Beschreibung |
 |------|--------|-------------|
-| `24aa870` | `main` | fix(batch_hub): remove synth normalize no-op, extract XML helper |
-| `0a1dee3` | `main` | fix(synth_editor): ET.parse → _parse_xml_robust, combobox saves |
-| `b5165e3` | `main` | refactor: clean up song_manager volume helpers and dead history |
-| `7b69de1` | `main` | refactor: replace staticmethod wrappers in kit_manager |
-| `f710872` | `main` | v2.0.4 — bugfix release |
+| `a78ead6` | `main` | chore: bump version to 2.0.0 (staging system major release) |
+| `19855ff` | `main` | feat: backup supports exclude_samples option |
+| `129ee85` | `main` | feat: batch_hub uses StagingStore |
+| `1d1dee9` | `main` | feat: synth_editor uses StagingStore |
+| `f01b1ac` | `main` | feat: kit_manager uses StagingStore |
+| `c0da3ca` | `main` | feat: song_manager uses StagingStore |
+| `4c7fa9d` | `main` | feat: add StagingStore to MainWindow + status bar badge |
+| `8729152` | `main` | feat: add PendingPanel widget |
+| `f27a17e` | `main` | feat: add StagingStore core module |
 
 ---
 
 ## Aktueller Status
 
-### ✅ v2.0.4 aktueller Stand (2026-06-02)
+### ✅ v2.0.0 Staging-System implementiert (2026-04-16)
 
-| Feature | Status |
+Alle destruktiven Operationen (XML-Edit, Rename, Delete) werden jetzt gepuffert und erst auf expliziten Nutzerbefehl auf Disk geschrieben.
+
+| Komponente | Status |
 |---|---|
-| Staging-System (`StagingStore` + `PendingPanel`) | ✅ seit v2.0.0 |
-| Undo/Redo History (`ActionHistory`) | ✅ aktiv — `main_window.py` initialisiert und verteilt an alle Module |
-| Volume-Utils zentralisiert (`core/volume_utils.py`) | ✅ seit v2.0.3 |
-| Synth Editor — parent-block-anchored replacement | ✅ seit v2.0.4 |
-| Line-Ending-Normalisierung | ✅ bereinigt (v2.0.4) |
-| Synth Editor — OSC/LFO/Filter-Mode Speichern | ✅ seit v2.0.5 |
-| Redundante `staticmethod`-Wrapper entfernt | ✅ seit v2.0.5 |
+| `app/core/staging.py` — StagingStore + PendingChange | ✅ NEU |
+| `app/widgets/pending_panel.py` — PendingPanel Widget | ✅ NEU |
+| `app/main_window.py` — Staging-Badge + Alle-Speichern | ✅ geändert |
+| `app/modules/song_manager.py` | ✅ geändert |
+| `app/modules/kit_manager.py` | ✅ geändert |
+| `app/modules/synth_editor.py` | ✅ geändert |
+| `app/modules/batch_hub.py` — QThread-safe via Signal | ✅ geändert |
+| `app/core/backup.py` + `backup_sync.py` — exclude_samples | ✅ geändert |
 
 ### Staging-Architektur
 
@@ -81,18 +88,17 @@ DelugeHub/
 - Beim Speichern: Original überschreiben ODER in anderen Ordner exportieren
 - Beim App-Start mit SD-Card: Restore-Dialog wenn Session-Pending vorhanden
 
-### Undo/Redo-System
-
-- `app/core/history.py` — `ActionHistory` (30-Step Undo/Redo Stack)
-- Wird in `main_window.py:88` initialisiert und via `set_history()` an alle Module übergeben
-- Module mit Undo-Support: `kit_manager`, `synth_editor`, `sample_manager`, `lost_sample_finder`
-- `if self._history:` Guards sind **intentional** — defensiv für den Zeitraum vor `set_history()`
+### Line-Ending-Drift (noch offen)
+Mehrere Dateien auf `main` zeigen `M`-Status (CRLF↔LF), kein inhaltlicher Code-Unterschied. Noch nicht bereinigt.
 
 ---
 
 ## Offene Punkte / Nächste Schritte
 
-Keine bekannten offenen Punkte.
+1. **Line-Endings bereinigen** — `.gitattributes` mit `* text=auto` + `git add --renormalize .`
+2. **Minor/Code-Quality (aufgeschoben):**
+   - History-System nie initialisiert — toter Code in allen Modulen (`_history` immer `None`)
+   - Volume-Helper (`_vol_to_display` / `_display_to_vol`) dupliziert in `kit_manager` + `batch_hub`
 
 ---
 
@@ -101,7 +107,7 @@ Keine bekannten offenen Punkte.
 - **XML lesen:** immer `_parse_xml_robust(path)` aus `core/xml_parser.py` — niemals `ET.parse()`
 - **Dateien lesen/schreiben:** immer `_read_xml(path)` / `_write_xml(path, content, enc)` aus `core/file_ops.py`
 - **Glob auf Linux:** immer beide Patterns `*.XML` + `*.xml` sammeln
-- `core/history.py` — `ActionHistory`-Klasse, initialisiert in `main_window.py`, via `set_history()` an Module verteilt
+- `core/history.py` existiert nicht — alle `if self._history:` Guards sind toter Code
 
 ## Skills & Workflows
 

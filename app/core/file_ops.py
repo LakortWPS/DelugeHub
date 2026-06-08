@@ -11,6 +11,19 @@ from .models import SDCardIndex
 
 log = logging.getLogger(__name__)
 
+# Modul-level Cache für XML-Dateilisten (stabil während einer Session)
+_xml_file_cache: dict = {}
+
+
+def invalidate_xml_cache(sd_root=None) -> None:
+    """Cache leeren — wird beim Scan-Start aufgerufen."""
+    global _xml_file_cache
+    if sd_root is None:
+        _xml_file_cache.clear()
+    else:
+        _xml_file_cache.pop(sd_root, None)
+
+
 # Encodings Deluge firmware is known to write XML files with.
 # We try these in order and fall back to latin-1 (which never raises).
 _XML_ENCODINGS = ("utf-8-sig", "utf-8", "latin-1")
@@ -43,7 +56,9 @@ def _write_xml(path: Path, content: str, encoding: str = "utf-8") -> None:
 
 
 def _all_xml_files(sd_root: Path) -> list[Path]:
-    """All XML files across SONGS, KITS, SYNTHS (case-insensitive extension)."""
+    """All XML files across SONGS, KITS, SYNTHS (cached per sd_root)."""
+    if sd_root in _xml_file_cache:
+        return _xml_file_cache[sd_root]
     xmls = []
     for folder in ("SONGS", "KITS", "SYNTHS"):
         d = sd_root / folder
@@ -51,6 +66,7 @@ def _all_xml_files(sd_root: Path) -> list[Path]:
             for f in d.rglob("*"):
                 if f.is_file() and f.suffix.lower() == ".xml":
                     xmls.append(f)
+    _xml_file_cache[sd_root] = xmls
     return xmls
 
 

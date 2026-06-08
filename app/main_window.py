@@ -83,6 +83,9 @@ class MainWindow(QMainWindow):
         self._nav_buttons: dict[str, NavButton] = {}
         self._sidebar_collapsed = False
         self._backup_banner_dismissed = False
+        self._current_page: str = "dashboard"
+        self._initial_scan_done: bool = False
+        self._page_before_scan: str = "dashboard"
 
         # Global undo/redo history — shared across all modules
         self._history = ActionHistory()
@@ -418,6 +421,7 @@ class MainWindow(QMainWindow):
     def _navigate(self, key: str):
         if key not in self._modules:
             return
+        self._current_page = key
         self._stack.setCurrentWidget(self._modules[key])
         for k, btn in self._nav_buttons.items():
             btn.set_active(k == key)
@@ -465,6 +469,10 @@ class MainWindow(QMainWindow):
             self._scan_worker.cancel()
             self._scan_worker.wait()
 
+        self._page_before_scan = self._current_page
+        from .core.file_ops import invalidate_xml_cache
+        invalidate_xml_cache()
+
         self._scan_btn.setEnabled(False)
         self._progress_bar.setVisible(True)
         self._progress_bar.setValue(0)
@@ -511,7 +519,11 @@ class MainWindow(QMainWindow):
         if not self._backup_banner_dismissed:
             self._backup_banner.setVisible(True)
 
-        self._navigate("dashboard")
+        if not self._initial_scan_done:
+            self._initial_scan_done = True
+            self._navigate("dashboard")
+        else:
+            self._navigate(self._page_before_scan)
 
     def _on_scan_error(self, msg: str):
         self._scan_btn.setEnabled(True)
@@ -599,11 +611,3 @@ class MainWindow(QMainWindow):
                 self._trigger_scan()
         except Exception as e:
             QMessageBox.warning(self, "Redo fehlgeschlagen", str(e))
-
-    # ── Cleanup ────────────────────────────────────────────────────────────
-    def closeEvent(self, event):
-        self._save_settings()
-        if self._scan_worker and self._scan_worker.isRunning():
-            self._scan_worker.cancel()
-            self._scan_worker.wait()
-        super().closeEvent(event)

@@ -2,6 +2,7 @@
 DelugeHub — Lost Sample Finder Module
 Find, auto-match and repair missing sample references across all XML files.
 """
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,8 @@ from ..core.lost_finder import (
     MissingRef, collect_missing_refs, auto_match_all, search_folder_for_missing
 )
 from ..core.file_ops import fix_xml_path, update_xml_path
+
+log = logging.getLogger(__name__)
 
 
 # ── Background worker for auto-match ──────────────────────────────────────
@@ -511,8 +514,8 @@ class LostSampleFinderModule(QWidget):
                     try:
                         _t, _e = _read_xml(_r.xml_file)
                         _snapshots[_r.xml_file] = (_t, _e)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.warning("XML-Snapshot konnte nicht gelesen werden (%s): %s", _r.xml_file.name, e)
             # Store on self for use in _on_apply_done
             self._pending_history_snapshots = _snapshots
 
@@ -543,8 +546,8 @@ class LostSampleFinderModule(QWidget):
                 try:
                     t, e = _read_xml(path)
                     afters[path] = (t, e)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("XML nach Apply nicht lesbar (%s): %s", path.name, e)
             count = sum(1 for r in self._refs if r.fixed)
             def _undo_all(s=snaps):
                 for p, (t, e) in s.items():
@@ -628,6 +631,6 @@ class LostSampleFinderModule(QWidget):
             match_str = str(ref.resolution) if ref.resolution else ""
             status = "Repariert" if ref.fixed else ("Bereit" if ref.resolution else "Offen")
             lines.append(f'"{ref.xml_file}","{ref.xml_type}","{ref.broken_path}",'
-                         f'"{match_str}","{ref.match_confidence}","{status}"\n')
+                         f'"{match_str}","{ref.match_confidence}","{status}\n')
         Path(path).write_text("".join(lines), encoding="utf-8")
         self._stats_label.setText(f"Report gespeichert: {path}")

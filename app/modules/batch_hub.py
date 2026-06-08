@@ -2,6 +2,7 @@
 DelugeHub — Batch Hub Module
 Cross-module batch operations: rename, export, delete, normalize, tag.
 """
+import logging
 import shutil
 import zipfile
 import re
@@ -22,6 +23,8 @@ from ..core.models import SDCardIndex
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import vol_to_display as _vol_to_display, display_to_vol as _display_to_vol
 
+log = logging.getLogger(__name__)
+
 # ── Rename-Schema Schemas ──────────────────────────────────────────────────
 RENAME_SCHEMAS = [
     ("Deluge-Style  (A001, A002 … B001 …)", "deluge"),
@@ -37,13 +40,20 @@ def _compute_rename(schema: str, extra: str, name: str, abs_index: int) -> str:
 
     abs_index: 0-basierter Index (start_index bereits eingerechnet).
     """
-    if schema == "deluge":
-        letter = chr(ord("A") + abs_index // 9)
-        num = (abs_index % 9) + 1
-        return f"{letter}{num:03d}"
-    elif schema == "compact":
-        letter = chr(ord("A") + abs_index // 9)
-        num = (abs_index % 9) + 1
+    if schema in ("deluge", "compact"):
+        # Deluge nutzt A1–A9, B1–B9, … Z1–Z9 = 234 Slots.
+        # Darüber hinaus: doppelte Buchstaben AA1, AB1, … (wie Excel-Spalten).
+        bucket = abs_index // 9
+        num    = (abs_index % 9) + 1
+        if bucket < 26:
+            letter = chr(ord("A") + bucket)
+        else:
+            # Excel-Stil: AA, AB, … AZ, BA, …
+            hi = (bucket - 26) // 26
+            lo = (bucket - 26) % 26
+            letter = chr(ord("A") + hi) + chr(ord("A") + lo)
+        if schema == "deluge":
+            return f"{letter}{num:03d}"
         return f"{letter}{num}"
     elif schema == "pattern":
         res = extra if extra.strip() else "{name}"
@@ -122,7 +132,8 @@ class BatchWorker(QThread):
                     if change:
                         pending.append(change)
                 success += 1
-            except Exception:
+            except Exception as e:
+                log.warning("Batch-Op fehlgeschlagen für %s: %s", item.file_path.name, e)
                 failed += 1
 
         return {"success": success, "failed": failed, "total": total}, pending
@@ -784,6 +795,10 @@ class BatchHubModule(QWidget):
                 return
             params["threshold"] = threshold
 
+        if self._worker and self._worker.isRunning():
+            self._status.setText("⚠  Batch läuft noch, bitte warten…")
+            return
+
         self._progress.setVisible(True)
         self._progress.setValue(0)
 
@@ -816,5 +831,10 @@ class BatchHubModule(QWidget):
                             c.file_path.rename(c.file_path.parent / c.new_name)
                         elif c.change_type == ChangeType.DELETE:
                             c.file_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.warning("Direkte Anwendung fehlgeschlagen (%s): %s", c.file_path.name, e)
+            self._status.setText(
+                f"✅  {result['success']}/{result['total']} erfolgreich"
+                + (f"  |  ⚠ {result['failed']} Fehler" if result["failed"] else "")
+            )
+            self.request_rescan.emit()

@@ -5,19 +5,32 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [2.0.5] — 2026-06-05
+## [2.2.0] — 2026-06-08
 
 ### Fixed
-- **Synth Editor — OSC type / LFO shape / filter mode not saved**: `_save_params` only wrote hex slider values; changes to the OSC type, LFO shape and filter mode comboboxes were silently discarded. Added pass 3 to handle both Deluge firmware formats (attribute and child-element) for these fields.
-- **Synth Editor — `ET.parse()` replaced with `_parse_xml_robust()`**: `_load_params` and `_save_params` used the standard parser directly, causing silent failures on malformed Deluge XMLs (BOM, invalid characters, missing closing tags). Both now use the robust parser with lxml recovery.
-- **Batch Hub — "Volumes normalisieren" silent no-op for Synths**: The option was listed in the Synths tab but `_do_normalize` only processes `<soundSources>` (a Kit-only structure). Removed from the Synths tab; Kits are unaffected.
-- **Batch Hub — import skipped count not shown**: Files already present at the destination were silently skipped; the status now shows how many were skipped.
+- **Navigation nach Rescan**: App wirft nach jedem Rescan nicht mehr auf das Dashboard zurück — du bleibst auf der Seite auf der du warst. Nur der allererste Scan landet auf dem Dashboard
+- **Worker Double-Start** (`batch_hub`, `backup_sync`): zweiter Klick auf Ausführen/Backup während ein Worker läuft wird jetzt geblockt mit Statusmeldung statt einem zweiten parallelen Worker
+- **Silent Exceptions → Logging**: alle `except Exception: pass` Blöcke in `batch_hub`, `kit_manager`, `lost_sample_finder`, `sample_manager`, `song_manager`, `synth_editor` loggen jetzt via `logging.getLogger` (Warning/Debug je nach Schwere)
 
-### Refactored
-- **kit_manager / song_manager — redundant `staticmethod` wrappers removed**: `_vol_to_display` / `_display_to_vol` class-level aliases replaced with direct calls to the already-imported functions from `core/volume_utils`, consistent with `batch_hub.py`'s import-alias pattern.
-- **song_manager — dead history interface removed**: `set_history` / `_history` were present but never used (all ops go through `StagingStore`); removed.
-- **batch_hub — XML file collection deduplicated**: `_validate_all_xmls` and `_global_replace` contained identical loops; extracted into `_collect_xml_files()` helper.
-- **synth_editor — `ParamSlider.get_value()` added**: symmetric counterpart to the existing `set_value()`; `_save_params` no longer accesses `._slider.value()` as a private attribute.
+### Performance
+- **XML-Dateilisten-Cache** (`file_ops.py`): `_all_xml_files()` baut die Liste einmalig pro Scan-Zyklus und cached sie; bei `rename_sample`/`move_sample` entfällt das wiederholte Iterieren über alle Dateien. Cache wird beim nächsten Scan-Start automatisch invalidiert
+
+---
+
+## [2.1.0] — 2026-06-08
+
+### Added
+- **Batch Hub — Rename-Schemas**: 5 wählbare Benennungsschemas für Songs, Kits und Synths:
+  1. Deluge-Style (`A001, A002 … A009, B001 …`)
+  2. Kompakt (`A1, A2 … A9, B1 …`)
+  3. Freies Pattern (`{name}`, `{index}`, `{INDEX}`)
+  4. Prefix + Nummer (`PREFIX001, PREFIX002 …`)
+  5. Name + Affix (Prefix/Suffix um den Originalnamen)
+- **Startindex-Spinner** (1–9999): Batch-Umbenennung beginnt bei beliebigem Index
+- **Live-Vorschau-Spalte**: dritte Tabellenspalte zeigt neuen Namen sofort bei jeder Änderung (orange = geändert, grau = unverändert)
+
+### Fixed
+- **`_compute_rename` Letter-Overflow**: bei mehr als 234 Einträgen (> Z9) wurden ungültige ASCII-Zeichen (`[`, `\`, …) generiert; ersetzt durch Excel-ähnliche Doppelbuchstaben (`AA1, AB1 …`)
 
 ---
 

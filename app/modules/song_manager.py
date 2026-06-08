@@ -2,6 +2,7 @@
 DelugeHub — Song Manager Module
 Browse, rename, duplicate, delete songs. Export song packages.
 """
+import logging
 import shutil
 import zipfile
 from pathlib import Path
@@ -21,6 +22,7 @@ from ..core.file_ops import update_xml_path
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import vol_to_display, display_to_vol
 
+log = logging.getLogger(__name__)
 
 COL_NAME = 0
 COL_BPM  = 1
@@ -37,6 +39,7 @@ class SongManagerModule(QWidget):
         super().__init__()
         self._index: Optional[SDCardIndex] = None
         self._songs: list[Song] = []
+        self._history = None
         self._staging: Optional[StagingStore] = None
         self._build_ui()
 
@@ -197,6 +200,9 @@ class SongManagerModule(QWidget):
             l.setObjectName(obj)
         return l
 
+    def set_history(self, history):
+        self._history = history
+
     def set_staging(self, staging: StagingStore):
         self._staging = staging
         if hasattr(self, '_pending_panel'):
@@ -234,7 +240,8 @@ class SongManagerModule(QWidget):
             try:
                 size_kb = s.file_path.stat().st_size / 1024
                 size_str = f"{size_kb:.0f} KB"
-            except Exception:
+            except Exception as e:
+                log.debug("Dateigröße nicht lesbar für %s: %s", s.file_path.name, e)
                 size_str = "—"
             self._table.setItem(row, COL_SIZE, QTableWidgetItem(size_str))
 
@@ -395,13 +402,17 @@ class SongManagerModule(QWidget):
                         try:
                             arcname = str(ref.abs_path.relative_to(self._index.root_path)).replace("\\", "/")
                             zf.write(ref.abs_path, arcname)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.warning("Sample konnte nicht exportiert werden (%s): %s", ref.abs_path.name if ref.abs_path else '?', e)
 
             size_mb = Path(dest).stat().st_size / (1024 * 1024)
             self._status.setText(f"✅  Exportiert: {Path(dest).name} ({size_mb:.1f} MB)")
         except Exception as e:
             QMessageBox.warning(self, "Export-Fehler", str(e))
+
+    # ── Volume-Cap Helpers (delegiert an core.volume_utils) ───────────────
+    _vol_to_display = staticmethod(vol_to_display)
+    _display_to_vol = staticmethod(display_to_vol)
 
     def _cap_song_master(self):
         song = self._selected_song()
@@ -441,14 +452,14 @@ class SongManagerModule(QWidget):
             self._status.setText("ℹ  Kein Volume-Wert in songParams gefunden.")
             return
 
-        current_display = vol_to_display(vol_str)
+        current_display = self._vol_to_display(vol_str)
         if current_display <= threshold:
             self._status.setText(
                 f"ℹ  Song-Master liegt bei {current_display:.1f}/50 — kein Cap nötig."
             )
             return
 
-        new_hex = display_to_vol(threshold)
+        new_hex = self._display_to_vol(threshold)
         text, enc = _read_xml(song.file_path)
 
         clips_pos = text.find('<sessionClips>')
@@ -478,63 +489,6 @@ class SongManagerModule(QWidget):
             self._status.setText(
                 f"⏳  Vorgemerkt: Song-Master {current_display:.1f}/50 → {threshold}/50."
             )
-            self._pending_panel.refresh()
-        else:
-            try:
-                _write_xml(song.file_path, new_text, enc)
-                self._status.setText(
-                    f"✅  Song-Master: {current_display:.1f}/50 → {threshold}/50 ({new_hex})."
-                )
-                self.request_rescan.emit()
-            except Exception as e:
-                QMessageBox.warning(self, "Fehler", str(e))
-
-    def _cap_clip_volumes(self):
-        import re
-
-        song = self._selected_song()
-        if not song:
-            return
-
-        threshold, ok = QInputDialog.getInt(
-            self, "Clip-Volumes begrenzen",
-            "Maximale Lautstärke pro Clip (0 – 50):",
-            40, 0, 50, 1
-        )
-        if not ok:
-            return
-
-        from ..core.file_ops import _read_xml, _write_xml
-
-        text, enc = _read_xml(song.file_path)
-
-        def cap_volume(m):
-            hex_str = m.group(2)
-            if vol_to_display(hex_str) > threshold:
-                return m.group(1) + f'volume="{display_to_vol(threshold)}"'
-            return m.group(0)
-
-        new_text = re.sub(
-            r'(<(?:kitParams|synthParams)\b[^>]*)volume="(0x[0-9A-Fa-f]+)"',
-            cap_volume,
-            text,
-        )
-
-        if new_text == text:
-            self._status.setText(
-                f"ℹ  Alle Clip-Volumes bereits ≤ {threshold}/50 — kein Cap nötig."
-            )
-            return
-
-        if self._staging:
-            self._staging.add(PendingChange(
-                change_type=ChangeType.XML_EDIT,
-                file_path=song.file_path,
-                source_module="song_manager",
-                new_content=new_text,
-                encoding=enc,
-            ))
-            self._status.setText(f"⏳  Vorgemerkt: Clip-Volumes auf max. {threshold}/50.")
             self._pending_panel.refresh()
         else:
             try:

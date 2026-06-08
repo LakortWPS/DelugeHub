@@ -2,6 +2,7 @@
 DelugeHub — Sample Manager Module
 Browse, move, rename, delete samples. Audio preview. Usage analysis.
 """
+import logging
 import wave
 import struct
 from pathlib import Path
@@ -19,6 +20,8 @@ from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QLinearGradient, QBru
 
 from ..core.models import SDCardIndex, Sample
 from ..core.file_ops import rename_sample, move_sample, delete_sample, copy_file_to_sd
+
+log = logging.getLogger(__name__)
 
 AUDIO_EXTENSIONS = {".wav", ".aif", ".aiff", ".mp3", ".flac", ".ogg"}
 
@@ -105,7 +108,8 @@ class WaveformWidget(QWidget):
                 for i in range(0, len(normalized), chunk)
             ][:target]
 
-        except Exception:
+        except Exception as e:
+            log.debug("Waveform load fehlgeschlagen: %s", e)
             self._samples = []
         self.update()
 
@@ -218,15 +222,15 @@ class AudioPlayer:
 
             self._playing = True
             self._sd.play(data, sample_rate)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Audio playback fehlgeschlagen: %s", e)
 
     def stop(self):
         if self._available:
             try:
                 self._sd.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Audio stop fehlgeschlagen: %s", e)
         self._playing = False
 
     @property

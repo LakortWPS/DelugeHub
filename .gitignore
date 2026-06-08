@@ -45,3 +45,6 @@ desktop.ini
 # App-specific
 *.log
 *.tmp
+
+# Audit Findings
+AUDIT_FINDINGS.md
