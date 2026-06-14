@@ -30,15 +30,15 @@ class PendingChange:
     encoding:      str = "utf-8"
     # rename
     new_name:      Optional[str] = None   # nur Dateiname, kein Pfad
-    # delete: kein extra Feld nötig
+    # delete: kein extra Feld noetig
 
     @property
     def display_name(self) -> str:
         name = self.file_path.name
         if self.change_type == ChangeType.RENAME:
-            return f"{name} → {self.new_name}"
+            return f"{name} -> {self.new_name}"
         if self.change_type == ChangeType.DELETE:
-            return f"{name} (löschen)"
+            return f"{name} (loeschen)"
         return f"{name} (bearbeitet)"
 
     def to_dict(self) -> dict:
@@ -55,23 +55,101 @@ class PendingChange:
         return cls(**d)
 
 
+def plan_global_replace(
+    xml_files: list[Path], find_text: str, replace_text: str,
+    source_module: str = "batch_hub",
+) -> list[PendingChange]:
+    """
+    Build a list of XML_EDIT PendingChanges for a global find/replace across
+    xml_files, without writing anything to disk.
+
+    Mirrors the slash-normalization of file_ops.update_xml_path (handles
+    both '/' and '\\' path separators), but - unlike update_xml_path -
+    does NOT touch the filesystem directly. The caller is expected to push
+    the returned changes into a StagingStore so the user can review the
+    affected files (and undo) before they are written, instead of every
+    matching XML across SONGS/KITS/SYNTHS being overwritten immediately.
+
+    Files that fail to read, or in which neither replacement produces a
+    change, are skipped (not included in the result).
+    """
+    from .file_ops import _read_xml
+
+    find_fwd = find_text.replace("\\", "/")
+    replace_fwd = replace_text.replace("\\", "/")
+    find_bwd = find_text.replace("/", "\\")
+    replace_bwd = replace_text.replace("/", "\\")
+
+    changes: list[PendingChange] = []
+    for xml_file in xml_files:
+        try:
+            text, enc = _read_xml(xml_file)
+        except Exception:
+            continue
+
+        new_text = text.replace(find_fwd, replace_fwd).replace(find_bwd, replace_bwd)
+
+        if new_text != text:
+            changes.append(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=xml_file,
+                source_module=source_module,
+                new_content=new_text,
+                encoding=enc,
+            ))
+
+    return changes
+
+
+def preview_global_replace(xml_files: list[Path], find_text: str) -> list[tuple[Path, int]]:
+    """
+    Compute, for each file in xml_files, how many times find_text would be
+    replaced by plan_global_replace — without writing anything to disk and
+    without building the (potentially large) PendingChange.new_content.
+
+    Used to show the user a preview ("these N files will be changed, with
+    this many replacements each") before staging/writing the global replace.
+
+    Uses the same '/' / '\\' normalization as plan_global_replace. Files
+    that fail to read, or that contain no match, are omitted from the
+    result. Order matches xml_files.
+    """
+    from .file_ops import _read_xml
+
+    find_fwd = find_text.replace("\\", "/")
+    find_bwd = find_text.replace("/", "\\")
+
+    results: list[tuple[Path, int]] = []
+    for xml_file in xml_files:
+        try:
+            text, _enc = _read_xml(xml_file)
+        except Exception:
+            continue
+
+        count = text.count(find_fwd)
+        if find_bwd != find_fwd:
+            count += text.count(find_bwd)
+
+        if count > 0:
+            results.append((xml_file, count))
+
+    return results
+
+
 PENDING_FILE = ".delugyhub_pending.json"
 
 
 class StagingStore:
-    """Singleton-ähnlicher Store; eine Instanz pro App."""
+    """Singleton-aehnlicher Store; eine Instanz pro App."""
 
     def __init__(self):
-        self._changes: dict[Path, PendingChange] = {}   # file_path → change
+        self._changes: dict[Path, PendingChange] = {}   # file_path -> change
         self._sd_root: Optional[Path] = None
 
-    # ── Konfiguration ──────────────────────────────────────────────────────
     def set_sd_root(self, sd_root: Path) -> None:
         self._sd_root = sd_root
 
-    # ── Änderungen verwalten ───────────────────────────────────────────────
     def add(self, change: PendingChange) -> None:
-        """Fügt eine Änderung hinzu. Überschreibt vorherige Änderung an derselben Datei."""
         self._changes[change.file_path] = change
         self._autosave()
 
@@ -98,14 +176,7 @@ class StagingStore:
     def count(self) -> int:
         return len(self._changes)
 
-    # ── Anwenden ───────────────────────────────────────────────────────────
     def apply_all(self, dest_root: Optional[Path] = None) -> tuple[int, int]:
-        """
-        Wendet alle Änderungen an.
-        dest_root=None  → Original überschreiben
-        dest_root=Path  → Dateien in diesen Ordner spiegeln (nur geänderte)
-        Gibt (success, failed) zurück.
-        """
         return self._apply(list(self._changes.values()), dest_root)
 
     def apply_for_module(self, source_module: str, dest_root: Optional[Path] = None) -> tuple[int, int]:
@@ -129,14 +200,13 @@ class StagingStore:
                 elif c.change_type == ChangeType.RENAME:
                     new_path = target.parent / c.new_name
                     if dest_root:
-                        # Kopiere Original unter neuem Namen ins Zielverzeichnis
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(str(c.file_path), str(new_path))
                     else:
                         c.file_path.rename(new_path)
 
                 elif c.change_type == ChangeType.DELETE:
-                    if not dest_root:   # Delete nur im Original-Modus
+                    if not dest_root:
                         c.file_path.unlink(missing_ok=True)
 
                 applied_paths.append(c.file_path)
@@ -144,7 +214,6 @@ class StagingStore:
             except Exception:
                 failed += 1
 
-        # Erfolgreich angewendete aus Store entfernen
         for p in applied_paths:
             self._changes.pop(p, None)
         self._autosave()
@@ -161,7 +230,6 @@ class StagingStore:
             )
         return dest_root / rel
 
-    # ── Persistenz ─────────────────────────────────────────────────────────
     def _autosave(self) -> None:
         if self._sd_root:
             try:
@@ -180,13 +248,12 @@ class StagingStore:
             tmp.write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            tmp.replace(target)  # atomar auf POSIX/Windows
+            tmp.replace(target)
         except OSError:
             tmp.unlink(missing_ok=True)
             raise
 
     def load_from_disk(self, sd_root: Path) -> bool:
-        """Lädt gespeicherte Änderungen. Gibt True zurück wenn Änderungen gefunden."""
         path = sd_root / PENDING_FILE
         if not path.exists():
             return False

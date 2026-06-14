@@ -626,11 +626,7 @@ class LostSampleFinderModule(QWidget):
         if not path:
             return
 
-        lines = ["XML-Datei,Typ,Fehlender Pfad,Match,Konfidenz,Status\n"]
-        for ref in self._refs:
-            match_str = str(ref.resolution) if ref.resolution else ""
-            status = "Repariert" if ref.fixed else ("Bereit" if ref.resolution else "Offen")
-            lines.append(f'"{ref.xml_file}","{ref.xml_type}","{ref.broken_path}",'
-                         f'"{match_str}","{ref.match_confidence}","{status}\n')
-        Path(path).write_text("".join(lines), encoding="utf-8")
+        from ..core.lost_finder import build_missing_samples_csv
+        csv_text = build_missing_samples_csv(self._refs)
+        Path(path).write_text(csv_text, encoding="utf-8")
         self._stats_label.setText(f"Report gespeichert: {path}")

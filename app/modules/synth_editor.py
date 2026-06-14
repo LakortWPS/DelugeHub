@@ -25,24 +25,7 @@ log = logging.getLogger(__name__)
 
 
 # ── Deluge value helpers ───────────────────────────────────────────────────
-def hex_to_norm(hex_str: str) -> float:
-    """Convert Deluge hex param (0x00000000–0xFFFFFFFF) to 0.0–1.0."""
-    try:
-        val = int(hex_str, 16) & 0xFFFFFFFF
-        return val / 0xFFFFFFFF
-    except Exception as e:
-        log.debug("hex_to_norm parse fehlgeschlagen (%s): %s", hex_str, e)
-        return 0.5
-
-
-def norm_to_hex(val: float) -> str:
-    """Convert 0.0–1.0 to Deluge hex string."""
-    val = max(0.0, min(1.0, val))
-    return f"0x{int(val * 0xFFFFFFFF):08X}"
-
-
-def rand_hex(lo: float = 0.0, hi: float = 1.0) -> str:
-    return norm_to_hex(random.uniform(lo, hi))
+from ..core.synth_utils import hex_to_norm, norm_to_hex, rand_hex, randomize_synth_xml
 
 
 # ── Param slider widget ────────────────────────────────────────────────────
@@ -332,6 +315,18 @@ class SynthEditorModule(QWidget):
         self._synths = index.synths
         self._populate_table(self._synths)
         self._status.setText(f"{len(self._synths)} Synths")
+
+    def select_by_path(self, file_path) -> bool:
+        """Select the table row whose Synth.file_path matches. Returns True if found."""
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            synth = item.data(Qt.UserRole) if item else None
+            if synth is not None and synth.file_path == file_path:
+                self._table.setRowHidden(row, False)
+                self._table.selectRow(row)
+                self._table.scrollToItem(item)
+                return True
+        return False
 
     def _populate_table(self, synths: list[Synth]):
         self._table.setRowCount(0)
@@ -641,24 +636,15 @@ class SynthEditorModule(QWidget):
             from ..core.file_ops import _read_xml, _write_xml
             text, enc = _read_xml(self._current_synth.file_path)
 
-            # Randomize all hex value fields in-place.
+            # Randomize all hex value fields in-place. Each occurrence of a
+            # tag (e.g. <pan> on osc1 AND osc2) gets its own independent
+            # random value instead of sharing one value per tag name.
             rand_tags = [
                 "frequency", "resonance", "attack", "decay", "sustain", "release",
                 "rate", "pan"
             ]
-            for tag in rand_tags:
-                rand_val = rand_hex(0.05, 0.95)
-                text = re.sub(
-                    rf'(<{tag}>)\s*0x[0-9A-Fa-f]+\s*(</{tag}>)',
-                    rf'\g<1>{rand_val}\2',
-                    text
-                )
-
-            # Randomize OSC type (first occurrence only).
             osc_types = ["square", "sine", "saw", "triangle"]
-            new_type = random.choice(osc_types)
-            text = re.sub(r'(<type>)(square|sine|saw|triangle)(</type>)',
-                         rf'\g<1>{new_type}\3', text, count=1)
+            text = randomize_synth_xml(text, rand_tags, 0.05, 0.95, osc_types)
 
             _write_xml(new_path, text, enc)
             self._status.setText(f"✅  Zufälliger Synth erstellt: {new_name}")

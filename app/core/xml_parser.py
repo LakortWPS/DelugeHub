@@ -103,6 +103,31 @@ def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
         return None
 
 
+def validate_xml_file(file_path: Path) -> Optional[str]:
+    """
+    Validate a Deluge XML file using the same robust parser as the rest of
+    the app (_parse_xml_robust).
+
+    Returns None if the file is readable/parseable (i.e. DelugeHub and the
+    Deluge itself can read it), or a short error message string if it is
+    genuinely broken.
+
+    NOTE: do NOT use xml.etree.ElementTree.parse() directly here — normal
+    firmware 2.0+ Deluge XML files have multiple top-level elements
+    (<firmwareVersion>, <earliestCompatibleFirmware>, <sound>/<kit>/<song>),
+    which ET.parse() rejects with "junk after document element" even though
+    the file is perfectly valid and readable by the Deluge and the rest of
+    this app.
+    """
+    try:
+        root = _parse_xml_robust(file_path)
+    except Exception as e:
+        return f"{e}"
+    if root is None:
+        return "Datei konnte nicht gelesen/geparst werden"
+    return None
+
+
 SAMPLE_ATTRIBUTES = [
     "fileName",
     "filePath",
@@ -138,6 +163,48 @@ def _collect_sample_refs(root: ET.Element, sd_root: Path) -> list[SampleRef]:
                     refs.append(_make_ref(txt, sd_root))
 
     return refs
+
+
+def _first_sample_ref_in(elem: ET.Element, sd_root: Path) -> Optional[SampleRef]:
+    """Return the first sample reference found anywhere inside elem (incl. itself), or None."""
+    for sub in elem.iter():
+        for attr in SAMPLE_ATTRIBUTES:
+            val = sub.get(attr, "")
+            if val and _looks_like_sample_path(val):
+                return _make_ref(val, sd_root)
+
+        if sub.tag in ("fileName", "filePath", "audioFileHolder"):
+            txt = (sub.text or "").strip()
+            if txt and _looks_like_sample_path(txt):
+                return _make_ref(txt, sd_root)
+
+    return None
+
+
+def map_kit_pads_to_samples(root: ET.Element, sd_root: Path, max_pads: int = 16) -> list[Optional[SampleRef]]:
+    """
+    Build a pad-index-aligned list of sample references for a kit.
+
+    Unlike `_collect_sample_refs` (which walks the whole tree, dedupes by
+    path and returns a flat list in first-seen order — not aligned with
+    pad positions), this walks the <sound>/<kitRow> elements in document
+    order and returns, for each pad slot, the first sample reference found
+    inside that specific element (or None if the pad has no sample, e.g. a
+    synth/MIDI/CV row).
+
+    The result always has exactly `max_pads` entries so callers can safely
+    zip it with a fixed-size pad grid.
+    """
+    sounds = root.findall(".//sound") or root.findall(".//kitRow")
+
+    pad_refs: list[Optional[SampleRef]] = []
+    for sound in sounds[:max_pads]:
+        pad_refs.append(_first_sample_ref_in(sound, sd_root))
+
+    while len(pad_refs) < max_pads:
+        pad_refs.append(None)
+
+    return pad_refs
 
 
 def _looks_like_sample_path(val: str) -> bool:
@@ -278,12 +345,14 @@ def parse_kit(file_path: Path, sd_root: Path) -> Optional[Kit]:
         pad_count = len(sounds)
 
         sample_refs = _collect_sample_refs(root, sd_root)
+        pad_refs = map_kit_pads_to_samples(root, sd_root)
 
         return Kit(
             file_path=file_path,
             name=file_path.stem,
             pad_count=pad_count,
             sample_refs=sample_refs,
+            pad_refs=pad_refs,
         )
     except Exception as e:
         log.error(f"Error parsing kit {file_path}: {e}")
@@ -301,9 +370,9 @@ def parse_synth(file_path: Path, sd_root: Path) -> Optional[Synth]:
         osc2_type = "square"
         filter_type = "lpf"
 
-        # OSC types — Deluge uses <osc1> / <osc2>, not <osc>.
-        # New firmware (3.x+): type as attribute  → <osc1 type="saw" …>
-        # Old firmware (2.x):  type as child elem → <osc1><type>saw</type></osc1>
+        # OSC types - Deluge uses <osc1> / <osc2>, not <osc>.
+        # New firmware (3.x+): type as attribute  -> <osc1 type="saw" ...>
+        # Old firmware (2.x):  type as child elem -> <osc1><type>saw</type></osc1>
         def _get_osc_type(osc_elem) -> str:
             if osc_elem is None:
                 return "square"

@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
     QAbstractItemView, QFileDialog, QInputDialog, QMessageBox,
     QComboBox, QLineEdit, QCheckBox, QProgressBar, QSplitter,
-    QScrollArea, QGroupBox, QTabWidget, QSpinBox
+    QScrollArea, QGroupBox, QTabWidget, QSpinBox,
+    QDialog, QDialogButtonBox, QListWidget
 )
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
@@ -931,7 +932,7 @@ class BatchHubModule(QWidget):
     def _validate_all_xmls(self):
         if not self._index:
             return
-        import xml.etree.ElementTree as ET
+        from ..core.xml_parser import validate_xml_file
 
         errors = []
         total = 0
@@ -947,10 +948,9 @@ class BatchHubModule(QWidget):
                     xml_files.append(f)
             for xml in xml_files:
                 total += 1
-                try:
-                    ET.parse(xml)
-                except ET.ParseError as e:
-                    errors.append(f"{xml.name}: {e}")
+                err = validate_xml_file(xml)
+                if err:
+                    errors.append(f"{xml.name}: {err}")
 
         if errors:
             self._validate_result.setText(
@@ -960,6 +960,39 @@ class BatchHubModule(QWidget):
         else:
             self._validate_result.setText(f"\u2705  Alle {total} XML-Dateien sind valide.")
             self._validate_result.setStyleSheet("color: #2ECC71; font-size: 12px;")
+
+    def _confirm_global_replace(self, find_text: str, replace_text: str,
+                                  preview: list) -> bool:
+        """Show a preview dialog listing affected files + match count per
+        file before any staging/writing happens. Returns True if the user
+        confirms."""
+        total = sum(count for _, count in preview)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Globales Ersetzen — Vorschau")
+        layout = QVBoxLayout(dialog)
+
+        header = QLabel(
+            f"'{find_text}' → '{replace_text}'\n"
+            f"{len(preview)} Datei(en) betroffen, {total} Treffer insgesamt:"
+        )
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        list_widget = QListWidget()
+        for file_path, count in preview:
+            list_widget.addItem(f"{file_path.name}  —  {count} Treffer")
+        layout.addWidget(list_widget)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Ersetzen")
+        buttons.button(QDialogButtonBox.Cancel).setText("Abbrechen")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        dialog.resize(440, 420)
+        return dialog.exec() == QDialog.Accepted
 
     def _global_replace(self):
         if not self._index:
@@ -971,30 +1004,44 @@ class BatchHubModule(QWidget):
             QMessageBox.warning(self, "Fehler", "Bitte Suchbegriff eingeben.")
             return
 
-        reply = QMessageBox.question(
-            self, "Globales Ersetzen",
-            f"\'{find_text}\' \u2192 \'{replace_text}\'\nin ALLEN XML-Dateien ersetzen?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        modified = 0
+        seen_xml2 = set()
+        xml_files = []
         for folder in ("SONGS", "KITS", "SYNTHS"):
             d = self._index.root_path / folder
             if not d.exists():
                 continue
-            seen_xml2 = set()
-            xml_files = []
             for f in d.rglob("*"):
                 if f.is_file() and f.suffix.lower() == ".xml" and f not in seen_xml2:
                     seen_xml2.add(f)
                     xml_files.append(f)
-            for xml in xml_files:
-                from ..core.file_ops import update_xml_path
-                if update_xml_path(xml, find_text, replace_text):
-                    modified += 1
 
-        self._status.setText(f"\u2705  {modified} XML-Dateien aktualisiert.")
-        if modified:
+        from ..core.staging import plan_global_replace, preview_global_replace
+        preview = preview_global_replace(xml_files, find_text)
+
+        if not preview:
+            self._status.setText("ℹ  Keine Treffer — keine Datei geändert.")
+            return
+
+        if not self._confirm_global_replace(find_text, replace_text, preview):
+            return
+
+        changes = plan_global_replace(xml_files, find_text, replace_text)
+
+        if not changes:
+            self._status.setText("ℹ  Keine Treffer — keine Datei geändert.")
+            return
+
+        if self._staging:
+            # Stage the changes so the user can review/undo before they are
+            # written to disk, instead of immediately overwriting every
+            # matching XML across SONGS/KITS/SYNTHS with no way back.
+            for c in changes:
+                self._staging.add(c)
+            self._status.setText(f"⏳  {len(changes)} XML-Dateien vorgemerkt (Staging).")
+            self._pending_panel.refresh()
+        else:
+            from ..core.file_ops import _write_xml
+            for c in changes:
+                _write_xml(c.file_path, c.new_content, c.encoding)
+            self._status.setText(f"✅  {len(changes)} XML-Dateien aktualisiert.")
             self.request_rescan.emit()

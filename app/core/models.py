@@ -45,6 +45,7 @@ class Kit:
     name: str
     pad_count: int = 0
     sample_refs: list[SampleRef] = field(default_factory=list)
+    pad_refs: list[Optional[SampleRef]] = field(default_factory=list)
     raw_xml: Optional[str] = None
 
     @property

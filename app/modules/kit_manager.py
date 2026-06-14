@@ -282,6 +282,18 @@ class KitManagerModule(QWidget):
         self._populate_table(self._kits)
         self._status.setText(f"{len(self._kits)} Kits")
 
+    def select_by_path(self, file_path) -> bool:
+        """Select the table row whose Kit.file_path matches. Returns True if found."""
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            kit = item.data(Qt.UserRole) if item else None
+            if kit is not None and kit.file_path == file_path:
+                self._table.setRowHidden(row, False)
+                self._table.selectRow(row)
+                self._table.scrollToItem(item)
+                return True
+        return False
+
     def _populate_table(self, kits: list[Kit]):
         self._table.setRowCount(0)
         for k in kits:
@@ -335,8 +347,8 @@ class KitManagerModule(QWidget):
             pad.style().unpolish(pad)
             pad.style().polish(pad)
 
-        for i, ref in enumerate(kit.sample_refs[:16]):
-            if i < len(self._pads):
+        for i, ref in enumerate(kit.pad_refs[:16]):
+            if i < len(self._pads) and ref is not None:
                 name = Path(ref.path.replace("\\", "/")).stem
                 self._pads[i].set_sample(name, ref.exists)
 
@@ -345,8 +357,8 @@ class KitManagerModule(QWidget):
         if not self._current_kit:
             return
 
-        refs = self._current_kit.sample_refs
-        if pad_index < len(refs):
+        refs = self._current_kit.pad_refs
+        if pad_index < len(refs) and refs[pad_index] is not None:
             ref = refs[pad_index]
             status = "✅ Vorhanden" if ref.exists else "❌ Fehlt"
             self._pad_info.setText(
@@ -379,13 +391,32 @@ class KitManagerModule(QWidget):
             return
 
         kit = self._current_kit
-        refs = kit.sample_refs
-        if self._selected_pad < len(refs):
+        refs = kit.pad_refs
+        if self._selected_pad < len(refs) and refs[self._selected_pad] is not None:
             old_rel = refs[self._selected_pad].path
-            from ..core.file_ops import update_xml_path
-            if update_xml_path(kit.file_path, old_rel, new_rel):
-                self._status.setText(f"✅  Pad {self._selected_pad + 1} → {new_path.name}")
-                self.request_rescan.emit()
+            from ..core.file_ops import compute_xml_path_update, _write_xml
+            result = compute_xml_path_update(kit.file_path, old_rel, new_rel)
+            if result is None:
+                self._status.setText("ℹ  Pfad konnte nicht im XML gefunden werden.")
+                return
+            new_text, enc = result
+            if self._staging:
+                self._staging.add(PendingChange(
+                    change_type=ChangeType.XML_EDIT,
+                    file_path=kit.file_path,
+                    source_module="kit_manager",
+                    new_content=new_text,
+                    encoding=enc,
+                ))
+                self._status.setText(f"⏳  Vorgemerkt: Pad {self._selected_pad + 1} → {new_path.name}")
+                self._pending_panel.refresh()
+            else:
+                try:
+                    _write_xml(kit.file_path, new_text, enc)
+                    self._status.setText(f"✅  Pad {self._selected_pad + 1} → {new_path.name}")
+                    self.request_rescan.emit()
+                except Exception as e:
+                    QMessageBox.warning(self, "Fehler", str(e))
         else:
             QMessageBox.information(self, "Info", "XML-Schreiben für neue Pads noch nicht implementiert.")
 
@@ -828,7 +859,7 @@ class KitManagerModule(QWidget):
                 source_module="kit_manager",
                 new_content=new_text,
                 encoding=enc,
-            ))
+                   ))
             self._status.setText(f"⏳  Vorgemerkt: {changed} Pad-Volume(s) auf max. {threshold}/50.")
             self._pending_panel.refresh()
         else:

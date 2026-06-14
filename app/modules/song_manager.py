@@ -215,6 +215,18 @@ class SongManagerModule(QWidget):
         self._populate_table(self._songs)
         self._status.setText(f"{len(self._songs)} Songs  •  {sum(len(s.missing_samples) for s in self._songs)} fehlende Referenzen")
 
+    def select_by_path(self, file_path) -> bool:
+        """Select the table row whose Song.file_path matches. Returns True if found."""
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, COL_NAME)
+            song = item.data(Qt.UserRole) if item else None
+            if song is not None and song.file_path == file_path:
+                self._table.setRowHidden(row, False)
+                self._table.selectRow(row)
+                self._table.scrollToItem(item)
+                return True
+        return False
+
     def _populate_table(self, songs: list[Song]):
         self._table.setRowCount(0)
         for s in songs:
@@ -540,7 +552,7 @@ class SongManagerModule(QWidget):
                 file_path=song.file_path,
                 source_module="song_manager",
                 new_content=new_text,
-                encoding=enc,
+                              encoding=enc,
             ))
             self._status.setText(f"⏳  Vorgemerkt: Clip-Volumes → max. {threshold}/50.")
             self._pending_panel.refresh()

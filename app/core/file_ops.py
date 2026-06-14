@@ -70,12 +70,16 @@ def _all_xml_files(sd_root: Path) -> list[Path]:
     return xmls
 
 
-def update_xml_path(xml_file: Path, old_rel: str, new_rel: str) -> bool:
+def compute_xml_path_update(xml_file: Path, old_rel: str, new_rel: str) -> Optional[tuple[str, str]]:
     """
-    Replace old_rel with new_rel inside xml_file (text-based replacement).
-    Handles both forward- and back-slash variants.
-    Preserves the original file encoding so the Deluge can still read it.
-    Returns True if the file was modified.
+    Compute the result of replacing old_rel with new_rel inside xml_file
+    (text-based replacement, both forward- and back-slash variants), WITHOUT
+    writing anything to disk.
+
+    Returns (new_text, encoding) if the replacement would change the file,
+    or None if old_rel was not found (no change) or the file could not be
+    read. Callers can pass the result into a StagingStore.PendingChange so
+    the edit can be reviewed/undone before being written.
     """
     try:
         text, enc = _read_xml(xml_file)
@@ -91,9 +95,28 @@ def update_xml_path(xml_file: Path, old_rel: str, new_rel: str) -> bool:
         text = text.replace(old_bwd, new_bwd)
 
         if text != orig:
-            _write_xml(xml_file, text, enc)
-            return True
+            return text, enc
+        return None
+    except Exception as e:
+        log.error(f"compute_xml_path_update failed for {xml_file}: {e}")
+        return None
+
+
+def update_xml_path(xml_file: Path, old_rel: str, new_rel: str) -> bool:
+    """
+    Replace old_rel with new_rel inside xml_file (text-based replacement).
+    Handles both forward- and back-slash variants.
+    Preserves the original file encoding so the Deluge can still read it.
+    Writes the change directly to disk (no staging) and returns True if the
+    file was modified.
+    """
+    result = compute_xml_path_update(xml_file, old_rel, new_rel)
+    if result is None:
         return False
+    text, enc = result
+    try:
+        _write_xml(xml_file, text, enc)
+        return True
     except Exception as e:
         log.error(f"update_xml_path failed for {xml_file}: {e}")
         return False

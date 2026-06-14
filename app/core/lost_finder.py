@@ -2,6 +2,8 @@
 DelugeHub — Lost Sample Finder (Core Logic)
 Scans all XML files for broken sample references, finds matches on SD card.
 """
+import csv
+import io
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -32,6 +34,28 @@ class MissingRef:
     @property
     def filename(self) -> str:
         return Path(self.broken_path.replace("\\", "/")).name
+
+
+def build_missing_samples_csv(refs: list[MissingRef]) -> str:
+    """
+    Build a CSV report of missing sample references as a string.
+
+    Uses the csv module so embedded quotes, commas, or newlines in file
+    paths are escaped correctly — the result is always valid, machine-
+    readable CSV (fixes a previous bug where manual f-string formatting
+    produced rows with an unterminated trailing quote).
+    """
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(["XML-Datei", "Typ", "Fehlender Pfad", "Match", "Konfidenz", "Status"])
+    for ref in refs:
+        match_str = str(ref.resolution) if ref.resolution else ""
+        status = "Repariert" if ref.fixed else ("Bereit" if ref.resolution else "Offen")
+        writer.writerow([
+            str(ref.xml_file), ref.xml_type, ref.broken_path,
+            match_str, ref.match_confidence, status,
+        ])
+    return output.getvalue()
 
 
 def collect_missing_refs(index: SDCardIndex) -> list[MissingRef]:

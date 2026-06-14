@@ -8,11 +8,14 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QFileDialog, QStackedWidget,
-    QProgressBar, QApplication, QFrame, QMessageBox
+    QProgressBar, QApplication, QFrame, QMessageBox,
+    QLineEdit, QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import Qt, QEvent
+from PySide6.QtGui import QShortcut, QKeySequence
 
 from .theme import get_theme
+from .core.search import search_index, KIND_ICON
 from .core.history import ActionHistory
 from .core.sd_scanner import ScanWorker
 from .core.staging import StagingStore
@@ -162,6 +165,14 @@ class MainWindow(QMainWindow):
         self._scan_overlay.hide()
         self._stack.installEventFilter(self)
 
+        self._build_shortcuts()
+
+    def _build_shortcuts(self):
+        """Global keyboard shortcuts: Undo/Redo/Scan."""
+        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._do_undo)
+        QShortcut(QKeySequence("Ctrl+Y"), self, activated=self._do_redo)
+        QShortcut(QKeySequence("Ctrl+R"), self, activated=self._trigger_scan)
+
     def eventFilter(self, obj, event):
         """Keep the scan overlay sized to match the content area."""
         if obj is self._stack and event.type() == QEvent.Resize:
@@ -234,6 +245,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._scan_btn)
 
         layout.addStretch()
+
+        self._search_edit = QLineEdit()
+        self._search_edit.setObjectName("GlobalSearch")
+        self._search_edit.setPlaceholderText("🔍  Suche (Songs, Kits, Synths, Samples)…")
+        self._search_edit.setFixedWidth(280)
+        self._search_edit.setFixedHeight(32)
+        self._search_edit.textChanged.connect(self._on_search_text_changed)
+        layout.addWidget(self._search_edit)
+
+        self._search_results = QListWidget(self)
+        self._search_results.setObjectName("GlobalSearchResults")
+        self._search_results.setWindowFlags(Qt.Popup)
+        self._search_results.setFocusPolicy(Qt.NoFocus)
+        self._search_results.itemClicked.connect(self._on_search_result_clicked)
+        self._search_results.hide()
 
         self._undo_btn = QPushButton("↩")
         self._undo_btn.setObjectName("IconButton")
@@ -416,6 +442,43 @@ class MainWindow(QMainWindow):
         settings_mod.sd_path_changed.connect(self._on_sd_path_changed)
         settings_mod.theme_changed.connect(self._apply_theme)
         settings_mod.auto_scan_changed.connect(self._on_auto_scan_changed)
+
+    # ── Globale Suche ──────────────────────────────────────────────────────
+    def _on_search_text_changed(self, text: str):
+        self._search_results.clear()
+
+        if not text.strip() or self._index is None:
+            self._search_results.hide()
+            return
+
+        results = search_index(self._index, text, limit=20)
+        if not results:
+            self._search_results.hide()
+            return
+
+        for r in results:
+            icon = KIND_ICON.get(r.kind, "")
+            item = QListWidgetItem(f"{icon}  {r.name}")
+            item.setData(Qt.UserRole, r)
+            self._search_results.addItem(item)
+
+        pos = self._search_edit.mapToGlobal(self._search_edit.rect().bottomLeft())
+        self._search_results.move(pos)
+        self._search_results.setFixedWidth(self._search_edit.width())
+        row_h = self._search_results.sizeHintForRow(0) if self._search_results.count() else 24
+        height = min(row_h * self._search_results.count() + 4, 320)
+        self._search_results.setFixedHeight(height)
+        self._search_results.show()
+
+    def _on_search_result_clicked(self, item: QListWidgetItem):
+        result = item.data(Qt.UserRole)
+        self._search_results.hide()
+        if result is None:
+            return
+        self._navigate(result.module_key)
+        module = self._modules.get(result.module_key)
+        if module and hasattr(module, "select_by_path"):
+            module.select_by_path(result.file_path)
 
     # ── Navigation ─────────────────────────────────────────────────────────
     def _navigate(self, key: str):

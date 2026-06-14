@@ -440,6 +440,30 @@ class SampleManagerModule(QWidget):
             f"{len(index.unused_samples)} ungenutzt"
         )
 
+    def select_by_path(self, file_path) -> bool:
+        """Select the table row whose Sample.file_path matches. Returns True if found."""
+        def _find_row():
+            for row in range(self._table.rowCount()):
+                item = self._table.item(row, 0)
+                sample = item.data(Qt.UserRole) if item else None
+                if sample is not None and sample.file_path == file_path:
+                    return row, item
+            return None, None
+
+        row, item = _find_row()
+        if row is None and self._index is not None:
+            # Result may be filtered out by the current folder selection —
+            # reset to the full sample list and try again.
+            self._populate_table(self._index.samples)
+            row, item = _find_row()
+
+        if row is not None:
+            self._table.setRowHidden(row, False)
+            self._table.selectRow(row)
+            self._table.scrollToItem(item)
+            return True
+        return False
+
     # ── Tree ───────────────────────────────────────────────────────────────
     def _populate_tree(self):
         self._tree.clear()
