@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 class AutoMatchWorker(QThread):
     progress = Signal(int, str)
     finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, refs: list, sd_root: Path):
         super().__init__()
@@ -35,10 +36,14 @@ class AutoMatchWorker(QThread):
         self.sd_root = sd_root
 
     def run(self):
-        self.progress.emit(5, "Erstelle Datei-Index…")
-        auto_match_all(self.refs, self.sd_root)
-        self.progress.emit(100, "Auto-Match abgeschlossen.")
-        self.finished.emit(self.refs)
+        try:
+            self.progress.emit(5, "Erstelle Datei-Index…")
+            auto_match_all(self.refs, self.sd_root)
+            self.progress.emit(100, "Auto-Match abgeschlossen.")
+            self.finished.emit(self.refs)
+        except Exception as e:
+            log.error("AutoMatchWorker fehlgeschlagen: %s", e)
+            self.error.emit(str(e))
 
 
 # ── Apply fixes worker ─────────────────────────────────────────────────────
@@ -376,7 +381,14 @@ class LostSampleFinderModule(QWidget):
             self._stats_label.setText(m)
         ))
         self._worker.finished.connect(self._on_auto_match_done)
+        self._worker.error.connect(self._on_auto_match_error)
         self._worker.start()
+
+    def _on_auto_match_error(self, msg: str):
+        self._progress.setVisible(False)
+        self._auto_match_btn.setEnabled(True)
+        self._stats_label.setText(f"⚠  Auto-Match Fehler: {msg}")
+        QMessageBox.warning(self, "Auto-Match Fehler", msg)
 
     def _on_auto_match_done(self, refs):
         self._progress.setVisible(False)

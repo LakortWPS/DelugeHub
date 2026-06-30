@@ -75,6 +75,27 @@ def _compute_rename(schema: str, extra: str, name: str, abs_index: int) -> str:
     return name
 
 
+class SimpleWorker(QThread):
+    """Lightweight worker for single-function background tasks (export, delete)."""
+    progress = Signal(int)
+    finished = Signal(str)   # status message
+    error = Signal(str)
+
+    def __init__(self, fn, *args, **kwargs):
+        super().__init__()
+        self._fn = fn
+        self._args = args
+        self._kwargs = kwargs
+
+    def run(self):
+        try:
+            msg = self._fn(self.progress.emit, *self._args, **self._kwargs)
+            self.finished.emit(msg or "")
+        except Exception as e:
+            log.error("SimpleWorker fehlgeschlagen: %s", e)
+            self.error.emit(str(e))
+
+
 class BatchWorker(QThread):
     progress = Signal(int, str)
     finished = Signal(dict, list)   # (stats, list[PendingChange])
@@ -853,8 +874,8 @@ class BatchHubModule(QWidget):
         dest_root = self._index.root_path / dest_subpath.replace("\\", "/").strip("/")
         dest_root.mkdir(parents=True, exist_ok=True)
 
-        audio_exts = {".wav", ".aif", ".aiff", ".mp3", ".flac"}
-        files = [f for f in src.rglob("*") if f.is_file() and f.suffix.lower() in audio_exts]
+        from ..core.sd_scanner import AUDIO_EXTENSIONS
+        files = [f for f in src.rglob("*") if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS]
 
         success = 0
         for f in files:
@@ -880,26 +901,35 @@ class BatchHubModule(QWidget):
             return
 
         samples = self._index.samples
-        self._progress.setVisible(True)
+        root_path = self._index.root_path
         total = len(samples)
 
-        try:
+        def _do_export(emit_progress):
             with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
                 for i, s in enumerate(samples):
                     if s.file_path.exists():
                         try:
-                            arcname = str(s.file_path.relative_to(self._index.root_path)).replace("\\", "/")
+                            arcname = str(s.file_path.relative_to(root_path)).replace("\\", "/")
                             zf.write(s.file_path, arcname)
                         except Exception as e:
                             log.warning("Sample nicht exportiert (%s): %s", s.file_path.name, e)
-                    self._progress.setValue(int((i + 1) / max(total, 1) * 100))
-
+                    emit_progress(int((i + 1) / max(total, 1) * 100))
             size_mb = Path(dest).stat().st_size / (1024 * 1024)
-            self._status.setText(f"\u2705  {total} Samples exportiert ({size_mb:.1f} MB)")
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", str(e))
-        finally:
-            self._progress.setVisible(False)
+            return f"\u2705  {total} Samples exportiert ({size_mb:.1f} MB)"
+
+        self._progress.setVisible(True)
+        self._progress.setValue(0)
+        self._simple_worker = SimpleWorker(_do_export)
+        self._simple_worker.progress.connect(self._progress.setValue)
+        self._simple_worker.finished.connect(lambda msg: (
+            self._progress.setVisible(False),
+            self._status.setText(msg),
+        ))
+        self._simple_worker.error.connect(lambda e: (
+            self._progress.setVisible(False),
+            QMessageBox.warning(self, "Fehler", e),
+        ))
+        self._simple_worker.start()
 
     def _delete_unused_samples(self):
         if not self._index:
@@ -912,22 +942,37 @@ class BatchHubModule(QWidget):
         total_mb = sum(s.size_mb for s in unused)
         reply = QMessageBox.warning(
             self, "Ungenutzte l\u00f6schen",
-            f"{len(unused)} ungenutzte Samples ({total_mb:.1f} MB) l\u00f6schen?\n\nDiese Aktion kann nicht r\u00fckg\u00e4ngig gemacht werden!",
+            f"{len(unused)} ungenutzte Samples ({total_mb:.1f} MB) l\u00f6schen?\n\nDiese Aktion kann nicht r\u00fcckg\u00e4ngig gemacht werden!",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             return
 
-        deleted = 0
-        for s in unused:
-            try:
-                s.file_path.unlink()
-                deleted += 1
-            except Exception as e:
-                log.warning("L\u00f6schen fehlgeschlagen (%s): %s", s.file_path.name, e)
+        def _do_delete(emit_progress):
+            deleted = 0
+            for i, s in enumerate(unused):
+                try:
+                    s.file_path.unlink()
+                    deleted += 1
+                except Exception as e:
+                    log.warning("L\u00f6schen fehlgeschlagen (%s): %s", s.file_path.name, e)
+                emit_progress(int((i + 1) / max(len(unused), 1) * 100))
+            return f"\ud83d\uddd1  {deleted} ungenutzte Samples gel\u00f6scht."
 
-        self._status.setText(f"\U0001f5d1  {deleted} ungenutzte Samples gel\u00f6scht.")
-        self.request_rescan.emit()
+        self._progress.setVisible(True)
+        self._progress.setValue(0)
+        self._simple_worker = SimpleWorker(_do_delete)
+        self._simple_worker.progress.connect(self._progress.setValue)
+        self._simple_worker.finished.connect(lambda msg: (
+            self._progress.setVisible(False),
+            self._status.setText(msg),
+            self.request_rescan.emit(),
+        ))
+        self._simple_worker.error.connect(lambda e: (
+            self._progress.setVisible(False),
+            QMessageBox.warning(self, "Fehler", e),
+        ))
+        self._simple_worker.start()
 
     def _validate_all_xmls(self):
         if not self._index:

@@ -530,7 +530,7 @@ class MainWindow(QMainWindow):
 
         if self._scan_worker and self._scan_worker.isRunning():
             self._scan_worker.cancel()
-            self._scan_worker.wait()
+            self._scan_worker.wait(3000)  # max 3 s warten, dann einfach überschreiben
 
         self._page_before_scan = self._current_page
         from .core.file_ops import invalidate_xml_cache

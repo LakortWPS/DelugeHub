@@ -5,12 +5,15 @@ und schreibt sie erst auf expliziten Nutzerbefehl auf Disk.
 """
 from __future__ import annotations
 import json
+import logging
 import shutil
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 
 class ChangeType(str, Enum):
@@ -211,7 +214,8 @@ class StagingStore:
 
                 applied_paths.append(c.file_path)
                 success += 1
-            except Exception:
+            except Exception as e:
+                log.error("Staging apply fehlgeschlagen (%s): %s", c.file_path.name, e)
                 failed += 1
 
         for p in applied_paths:
@@ -235,10 +239,7 @@ class StagingStore:
             try:
                 self.save_to_disk(self._sd_root)
             except OSError as e:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Autosave fehlgeschlagen (%s): %s", self._sd_root, e
-                )
+                log.warning("Autosave fehlgeschlagen (%s): %s", self._sd_root, e)
 
     def save_to_disk(self, sd_root: Path) -> None:
         data = [c.to_dict() for c in self._changes.values()]
