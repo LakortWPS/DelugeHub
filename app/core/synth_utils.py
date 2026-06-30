@@ -3,6 +3,7 @@ DelugeHub — Synth value helpers and randomization.
 
 Pure, UI-independent helpers shared by the Synth Editor.
 """
+from __future__ import annotations
 import random
 import re
 
