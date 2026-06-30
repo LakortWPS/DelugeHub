@@ -5,6 +5,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.2.2] — 2026-06-30
+
+### Fixed
+- **AutoMatchWorker**: Thread-Absturz bei SD-Karten-Disconnect wird jetzt abgefangen — `error`-Signal + `QMessageBox` statt stillem Thread-Tod
+- **Staging `_apply()`**: Exceptions werden jetzt via `logging` geloggt statt still geschluckt; `logging` auf Modul-Ebene statt inline-Import
+- **Batch Import `.ogg`**: `_batch_import` nutzt jetzt `AUDIO_EXTENSIONS` aus `sd_scanner` — `.ogg`-Dateien wurden vorher ignoriert
+- **Batch Export/Delete UI-Freeze**: `_batch_export_samples` und `_delete_unused_samples` laufen jetzt in einem `SimpleWorker`-Thread statt im Main-Thread
+- **`_start_scan` Timeout**: `wait()` ohne Timeout ersetzt durch `wait(3000)` — verhindert potenzielle UI-Hänger beim Scan-Abbruch
+- **Python 3.9 Kompatibilität**: `from __future__ import annotations` in `synth_utils.py` — `list[str] | None` Syntax funktioniert jetzt auch unter Python 3.9
+- **App-Icon im Built**: Icon wird jetzt als eingebettete Bytes geladen statt per Dateipfad — funktioniert zuverlässig in Dev und PyInstaller-Build
+- **Windows Taskleisten-Icon**: `SetCurrentProcessExplicitAppUserModelID` gesetzt — Icon erscheint korrekt in Taskleiste und Titelleiste
+
+---
+
 ## [2.2.0] — 2026-06-08
 
 ### Fixed
