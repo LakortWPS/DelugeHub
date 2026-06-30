@@ -1,7 +1,7 @@
 # DelugeHub — Projektstand
 
-**Stand:** 2026-06-08  
-**Version:** 2.2.0 (Branch: `main`)
+**Stand:** 2026-06-30  
+**Version:** 2.2.2 (Branch: `main`)
 
 ---
 
