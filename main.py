@@ -2,6 +2,7 @@
 DelugeHub — Entry Point
 """
 import sys
+import ctypes
 import logging
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
@@ -10,6 +11,10 @@ from PySide6.QtCore import Qt
 
 from app.main_window import MainWindow
 from app.modules.settings_module import APP_VERSION
+
+# Windows: AppUserModelID setzen damit Taskleiste + Fenster-Icon korrekt sind
+if sys.platform == "win32":
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DelugeHub.App")
 
 logging.basicConfig(
     level=logging.INFO,
