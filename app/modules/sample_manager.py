@@ -64,7 +64,11 @@ class WaveformWidget(QWidget):
                     idx = [int(i * total / self._MAX_FRAMES) for i in range(self._MAX_FRAMES)]
                     mono = mono[idx]
                 normalized = mono.tolist()
-            except ImportError:
+            except (ImportError, OSError):
+                # ImportError: soundfile not installed. OSError: soundfile
+                # is installed but its native libsndfile isn't present
+                # (raised at import time, not ImportError) — either way,
+                # fall back rather than crash.
                 # Fallback: stdlib wave — 16-bit WAV only
                 with wave.open(str(path), "rb") as wf:
                     n_frames = wf.getnframes()
@@ -184,14 +188,22 @@ class AudioPlayer:
             import sounddevice as sd
             self._sd = sd
             self._available = True
-        except ImportError:
+        except (ImportError, OSError):
+            # ImportError: package not installed at all.
+            # OSError: sounddevice IS installed but its native PortAudio
+            # library isn't present on this system - it raises that at
+            # import time, not ImportError. Either way this is the
+            # optional audio-preview feature, so it must degrade to
+            # "unavailable", not crash the whole app on startup.
             self._available = False
 
         try:
             import soundfile as sf
             self._sf = sf
             self._has_sf = True
-        except ImportError:
+        except (ImportError, OSError):
+            # Same reasoning: soundfile wraps the native libsndfile and
+            # raises OSError, not ImportError, if that library is missing.
             self._has_sf = False
 
     def play(self, path: Path):

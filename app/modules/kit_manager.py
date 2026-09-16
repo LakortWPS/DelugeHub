@@ -607,6 +607,16 @@ class KitManagerModule(QWidget):
                 "  pip install soundfile"
             )
             return
+        except OSError as e:
+            # soundfile IS installed but its native libsndfile library
+            # isn't present on this system - raised as OSError at import
+            # time, not ImportError, so it needs its own except clause.
+            QMessageBox.warning(
+                self, "Fehlende Bibliothek",
+                f"soundfile ist installiert, aber die native libsndfile-Bibliothek "
+                f"fehlt auf diesem System:\n\n{e}"
+            )
+            return
 
         for pad in pads:
             try:
