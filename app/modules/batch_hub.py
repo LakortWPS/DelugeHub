@@ -1074,9 +1074,11 @@ class BatchHubModule(QWidget):
             return
 
         changes = plan_global_replace(xml_files, find_text, replace_text)
+        skipped = len(preview) - len(changes)
+        skip_note = f" ({skipped} übersprungen — Ergebnis wäre kein gültiges XML)" if skipped > 0 else ""
 
         if not changes:
-            self._status.setText("ℹ  Keine Treffer — keine Datei geändert.")
+            self._status.setText(f"ℹ  Keine Datei geändert.{skip_note}")
             return
 
         if self._staging:
@@ -1085,11 +1087,11 @@ class BatchHubModule(QWidget):
             # matching XML across SONGS/KITS/SYNTHS with no way back.
             for c in changes:
                 self._staging.add(c)
-            self._status.setText(f"⏳  {len(changes)} XML-Dateien vorgemerkt (Staging).")
+            self._status.setText(f"⏳  {len(changes)} XML-Dateien vorgemerkt (Staging).{skip_note}")
             self._pending_panel.refresh()
         else:
             from ..core.file_ops import _write_xml
             for c in changes:
                 _write_xml(c.file_path, c.new_content, c.encoding)
-            self._status.setText(f"✅  {len(changes)} XML-Dateien aktualisiert.")
+            self._status.setText(f"✅  {len(changes)} XML-Dateien aktualisiert.{skip_note}")
             self.request_rescan.emit()

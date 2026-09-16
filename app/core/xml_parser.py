@@ -24,9 +24,13 @@ _DELUGE_METADATA_TAGS = {'firmwareVersion', 'earliestCompatibleFirmware'}
 _BARE_AMP_RE = re.compile(r'&(?!(?:amp|lt|gt|apos|quot|#\d+|#x[\da-fA-F]+);)')
 
 
-def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
+def _parse_xml_robust_text(text: str, context: str = "<string>") -> Optional[ET.Element]:
     """
-    Robustly parse a Deluge XML file.
+    Same robust parsing logic as _parse_xml_robust, but operating on an
+    already-loaded string instead of reading a file from disk. Used both
+    by _parse_xml_robust itself and by callers that need to validate XML
+    text that only exists in memory so far (e.g. a staged edit that has
+    not been written to disk yet).
 
     Handles all known Deluge firmware quirks:
 
@@ -46,12 +50,6 @@ def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
 
     Returns the content Element (e.g. <sound>, <kit>, <song>) or None on failure.
     """
-    try:
-        text, _ = _read_xml(file_path)
-    except Exception as e:
-        log.error(f"Cannot read {file_path}: {e}")
-        return None
-
     # 1. Strip invalid XML 1.0 characters
     text = _INVALID_XML_RE.sub('', text)
 
@@ -66,7 +64,7 @@ def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
         wrapper = ET.fromstring(f'<_deluge_root_>{body}</_deluge_root_>')
         children = list(wrapper)
         if not children:
-            log.error(f"No elements found in {file_path}")
+            log.error(f"No elements found in {context}")
             return None
         # Return the first non-metadata child (the actual content element)
         for child in children:
@@ -89,18 +87,31 @@ def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
             )
             children_lxml = list(lxml_root)
             if not children_lxml:
-                log.error(f"No elements found in {file_path} (lxml recovery)")
+                log.error(f"No elements found in {context} (lxml recovery)")
                 return None
             for child in children_lxml:
                 if child.tag not in _DELUGE_METADATA_TAGS:
-                    log.warning(f"Recovered malformed XML via lxml: {file_path}")
+                    log.warning(f"Recovered malformed XML via lxml: {context}")
                     return child  # lxml element — compatible API, no conversion needed
-            log.warning(f"Recovered malformed XML via lxml: {file_path}")
+            log.warning(f"Recovered malformed XML via lxml: {context}")
             return children_lxml[-1]
         except Exception as lxml_err:
-            log.error(f"lxml recovery also failed for {file_path}: {lxml_err}")
-        log.error(f"Error parsing {file_path}: {e}")
+            log.error(f"lxml recovery also failed for {context}: {lxml_err}")
+        log.error(f"Error parsing {context}: {e}")
         return None
+
+
+def _parse_xml_robust(file_path: Path) -> Optional[ET.Element]:
+    """
+    Robustly parse a Deluge XML file from disk. See _parse_xml_robust_text
+    for the parsing logic itself; this wrapper only handles the file read.
+    """
+    try:
+        text, _ = _read_xml(file_path)
+    except Exception as e:
+        log.error(f"Cannot read {file_path}: {e}")
+        return None
+    return _parse_xml_robust_text(text, context=str(file_path))
 
 
 def validate_xml_file(file_path: Path) -> Optional[str]:
@@ -125,6 +136,23 @@ def validate_xml_file(file_path: Path) -> Optional[str]:
         return f"{e}"
     if root is None:
         return "Datei konnte nicht gelesen/geparst werden"
+    return None
+
+
+def validate_xml_text(text: str, context: str = "<string>") -> Optional[str]:
+    """
+    Like validate_xml_file, but for XML text that is only in memory so far
+    (e.g. a staged edit before it is written to disk). Returns None if the
+    text is parseable via the same robust logic the rest of the app and
+    the Deluge itself tolerate, or a short error message if it is broken
+    beyond what even the lxml recovery pass can salvage.
+    """
+    try:
+        root = _parse_xml_robust_text(text, context=context)
+    except Exception as e:
+        return f"{e}"
+    if root is None:
+        return "Text konnte nicht geparst werden"
     return None
 
 

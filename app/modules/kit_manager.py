@@ -397,8 +397,19 @@ class KitManagerModule(QWidget):
         refs = kit.pad_refs
         if self._selected_pad < len(refs) and refs[self._selected_pad] is not None:
             old_rel = refs[self._selected_pad].path
-            from ..core.file_ops import compute_xml_path_update, _write_xml
-            result = compute_xml_path_update(kit.file_path, old_rel, new_rel)
+            from ..core.file_ops import compute_xml_path_update_at, _write_xml
+
+            # Two pads can reference the exact same sample. A plain
+            # whole-file replace would repoint every pad using old_rel,
+            # not just this one - so find which occurrence (in document
+            # order) belongs to *this* pad by counting identical
+            # references on earlier pads.
+            old_rel_fwd = old_rel.replace("\\", "/")
+            occurrence_index = sum(
+                1 for r in refs[:self._selected_pad]
+                if r is not None and r.path.replace("\\", "/") == old_rel_fwd
+            )
+            result = compute_xml_path_update_at(kit.file_path, old_rel, new_rel, occurrence_index)
             if result is None:
                 self._status.setText("ℹ  Pfad konnte nicht im XML gefunden werden.")
                 return

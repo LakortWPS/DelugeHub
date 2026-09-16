@@ -74,9 +74,13 @@ def plan_global_replace(
     matching XML across SONGS/KITS/SYNTHS being overwritten immediately.
 
     Files that fail to read, or in which neither replacement produces a
-    change, are skipped (not included in the result).
+    change, are skipped (not included in the result). A file whose result
+    would no longer be parseable XML is also skipped — rather than staging
+    (and, on Save, writing) a change that could leave the Deluge unable to
+    load that file — and logged as a warning so the skip is visible.
     """
     from .file_ops import _read_xml
+    from .xml_parser import validate_xml_text
 
     find_fwd = find_text.replace("\\", "/")
     replace_fwd = replace_text.replace("\\", "/")
@@ -92,14 +96,24 @@ def plan_global_replace(
 
         new_text = text.replace(find_fwd, replace_fwd).replace(find_bwd, replace_bwd)
 
-        if new_text != text:
-            changes.append(PendingChange(
-                change_type=ChangeType.XML_EDIT,
-                file_path=xml_file,
-                source_module=source_module,
-                new_content=new_text,
-                encoding=enc,
-            ))
+        if new_text == text:
+            continue
+
+        error = validate_xml_text(new_text, context=str(xml_file))
+        if error is not None:
+            log.warning(
+                "plan_global_replace: %s uebersprungen - Ergebnis waere kein "
+                "gueltiges XML mehr (%s)", xml_file.name, error,
+            )
+            continue
+
+        changes.append(PendingChange(
+            change_type=ChangeType.XML_EDIT,
+            file_path=xml_file,
+            source_module=source_module,
+            new_content=new_text,
+            encoding=enc,
+        ))
 
     return changes
 
