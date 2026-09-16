@@ -6,7 +6,7 @@
 ![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-green)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Version](https://img.shields.io/badge/Version-2.0.4-orange)
+![Version](https://img.shields.io/badge/Version-2.2.3-orange)
 
 DelugeHub is a desktop application for managing the SD card of the [Synthstrom Deluge](https://synthstrom.com/product/deluge/) synthesizer. It lets you browse, edit, rename and export songs, kits, synths and samples — all from your computer, with a non-destructive staging system that only writes changes to disk when you say so.
 
@@ -62,7 +62,7 @@ pip install sounddevice numpy
 
 ### Windows installer (no Python required)
 
-Download `DelugeHub-2.0.4-Setup.exe` from the [latest release](https://github.com/LakortWPS/DelugeHub/releases/latest) and run it. No Python installation needed.
+Download `DelugeHub-2.2.3-Setup.exe` from the [latest release](https://github.com/LakortWPS/DelugeHub/releases/latest) and run it. No Python installation needed.
 
 ---
 

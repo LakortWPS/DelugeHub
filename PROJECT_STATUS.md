@@ -1,7 +1,7 @@
 # DelugeHub — Projektstand
 
 **Stand:** 2026-09-16  
-**Version:** 2.2.2 (Branch: `main`)
+**Version:** 2.2.3 (Branch: `main`)
 
 ---
 
@@ -51,6 +51,12 @@ DelugeHub/
 
 | Hash | Branch | Beschreibung |
 |------|--------|-------------|
+| `e31a991` | `main` | Merge PR #3: Doku-Korrektur, CI, 5 Datensicherheits-Fixes, Startup-Crash-Fix |
+| `0c5c329` | `main` | fix: App-Crash beim Start wenn sounddevice/soundfile native Libs fehlen |
+| `9f1e340` | `main` | fix: gescopter Pad-Sample-Replace, Lost-Finder-Autotick, XML-Validity-Guard |
+| `49bab4b` | `main` | fix: Batch-Rename-Kollision, Kit/Song-Trash, sicherer Volume-Replace |
+| `18856b2` | `main` | test: tote Test-Stubs entfernt, CI-Workflow hinzugefügt |
+| `901ff6a` | `main` | docs: veraltete PROJECT_STATUS.md-Punkte korrigiert |
 | `7d450c8` | `main` | release: v2.2.2 — Bugfixes + Python 3.9 + Icon-Fix |
 | `fea7501` | `main` | chore: Version bump 2.2.2 |
 | `9474d36` | `main` | fix: Icon als eingebettete Bytes laden (kein Dateipfad, PyInstaller-sicher) |

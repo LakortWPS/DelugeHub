@@ -5,6 +5,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.2.3] — 2026-09-16
+
+### Added
+- **CI**: `.github/workflows/tests.yml` führt die Test-Suite (54 Tests) jetzt automatisch auf Python 3.10/3.11 bei jedem Push/PR aus — vorher lief nichts automatisch
+- **Batch-Rename-Kollisionsschutz**: `StagingStore._apply()` verweigert jetzt Umbenennungen, deren Zieldateiname von einer anderen Änderung im selben Batch oder einer bereits existierenden Datei belegt ist, statt still zu überschreiben
+- **Kit/Song-Löschen mit Papierkorb**: geht jetzt über `history.move_to_trash()` statt `Path.unlink()` — analog zu Sample/Synth-Löschungen, kein unwiderruflicher Verlust mehr
+- **XML-Validity-Guard bei "Globales Ersetzen"**: `plan_global_replace()` validiert jetzt, dass das Ergebnis noch gültiges XML ist, bevor es gestaged wird — ein zu breiter Suchbegriff kann keine kaputte XML-Datei mehr erzeugen
+
+### Fixed
+- **App-Absturz beim Start**: `AudioPlayer.__init__` (Sample Manager) fing beim `sounddevice`-Import nur `ImportError` ab; fehlt die native PortAudio-Bibliothek, wirft `sounddevice` stattdessen `OSError` — das crashte die gesamte App vor dem ersten Fenster. Gleiches Muster bei `soundfile` an drei weiteren Stellen behoben (Sample Manager Wellenform-Vorschau, Kit Manager Volume-Normalisierung) — alle vier degradieren jetzt sauber auf ihren bestehenden Fallback statt abzustürzen
+- **Pad-Sample neu zuweisen**: `kit_manager._reassign_pad` ersetzte den Sample-Pfad global in der gesamten Kit-XML — referenzierten zwei Pads dasselbe Sample, wurden beim Neuzuweisen versehentlich beide geändert. Jetzt gezielt nur auf den bearbeiteten Pad beschränkt
+- **Lost Sample Finder**: unsichere Auto-Match-Treffer ("Ähnlich"/Fuzzy und mehrdeutige "Exakt*"-Treffer) waren beim Batch-Anwenden standardmäßig vorangehakt; jetzt bleibt nur ein eindeutiger "Exakt"-Treffer automatisch angehakt, alles andere muss bewusst bestätigt werden
+- **Volume-Cap-Replace vereinheitlicht**: `kit_manager`/`batch_hub` nutzen jetzt eine gemeinsame, robustere Such-Funktion (`volume_utils.apply_sequential_replacements`) statt drei leicht unterschiedlicher Kopien derselben Replace-Schleife
+
+### Docs
+- `PROJECT_STATUS.md` korrigiert: drei als "offen" gelistete Punkte (Line-Endings, History-Wiring, Volume-Helper-Duplikate) waren tatsächlich bereits erledigt
+- Tote Test-Stub-Dateien (`test_dbg.py`, `test_lost_finder.py`) entfernt, deren `conftest.py`-Begründung ("korrupt, nicht löschbar") sich als falsch herausstellte
+
+---
+
 ## [2.2.2] — 2026-06-30
 
 ### Fixed
