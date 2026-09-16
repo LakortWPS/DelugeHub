@@ -22,7 +22,10 @@ from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex
 from ..core.staging import StagingStore, PendingChange, ChangeType
-from ..core.volume_utils import vol_to_display as _vol_to_display, display_to_vol as _display_to_vol
+from ..core.volume_utils import (
+    vol_to_display as _vol_to_display, display_to_vol as _display_to_vol,
+    apply_sequential_replacements,
+)
 
 log = logging.getLogger(__name__)
 
@@ -291,13 +294,13 @@ class BatchWorker(QThread):
             return None
 
         block = sources_match.group(1)
+        replacements = []
         for current_hex, new_hex, fmt in caps:
             if fmt == "attr":
-                old_tag, new_tag = f'volume="{current_hex}"', f'volume="{new_hex}"'
+                replacements.append((f'volume="{current_hex}"', f'volume="{new_hex}"'))
             else:
-                old_tag = f'<volume>{current_hex}</volume>'
-                new_tag = f'<volume>{new_hex}</volume>'
-            block = block.replace(old_tag, new_tag, 1)
+                replacements.append((f'<volume>{current_hex}</volume>', f'<volume>{new_hex}</volume>'))
+        block, _changed = apply_sequential_replacements(block, replacements)
 
         s, e = sources_match.start(1), sources_match.end(1)
         new_text = text[:s] + block + text[e:]

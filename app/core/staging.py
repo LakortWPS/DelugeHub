@@ -188,10 +188,15 @@ class StagingStore:
 
     def _apply(self, changes: list[PendingChange], dest_root: Optional[Path]) -> tuple[int, int]:
         from .file_ops import _write_xml
+        from .history import move_to_trash
         success = failed = 0
         applied_paths = []
+        blocked = self._blocked_rename_sources(changes, dest_root)
 
         for c in changes:
+            if c.file_path in blocked:
+                failed += 1
+                continue
             try:
                 target = self._resolve_target(c.file_path, dest_root)
 
@@ -209,8 +214,8 @@ class StagingStore:
                         c.file_path.rename(new_path)
 
                 elif c.change_type == ChangeType.DELETE:
-                    if not dest_root:
-                        c.file_path.unlink(missing_ok=True)
+                    if not dest_root and c.file_path.exists():
+                        move_to_trash(c.file_path)
 
                 applied_paths.append(c.file_path)
                 success += 1
@@ -222,6 +227,51 @@ class StagingStore:
             self._changes.pop(p, None)
         self._autosave()
         return success, failed
+
+    def _blocked_rename_sources(
+        self, changes: list[PendingChange], dest_root: Optional[Path]
+    ) -> set[Path]:
+        """
+        Refuse RENAME changes whose target filename would silently overwrite
+        an existing file - either another file already on disk, or another
+        change in this same batch that resolves to the same target name
+        (e.g. a batch-rename pattern without {index} collapsing several
+        files onto one name). Path.rename()/shutil.copy2() would otherwise
+        overwrite the target with no warning and no way to get it back.
+
+        Returns the set of source file_paths whose rename must be skipped.
+        """
+        rename_changes = [c for c in changes if c.change_type == ChangeType.RENAME]
+        if not rename_changes:
+            return set()
+
+        targets_by_source: dict[Path, Path] = {}
+        target_counts: dict[Path, int] = {}
+        for c in rename_changes:
+            target = self._resolve_target(c.file_path, dest_root).parent / c.new_name
+            targets_by_source[c.file_path] = target
+            target_counts[target] = target_counts.get(target, 0) + 1
+
+        blocked: set[Path] = set()
+        for c in rename_changes:
+            target = targets_by_source[c.file_path]
+            if target == c.file_path:
+                continue  # no-op rename (new name == current name)
+            if target_counts[target] > 1:
+                blocked.add(c.file_path)
+                log.error(
+                    "Staging: Umbenennen von %s uebersprungen - Zielname %s wird "
+                    "von mehreren Aenderungen in diesem Batch belegt",
+                    c.file_path.name, target.name,
+                )
+            elif target.exists():
+                blocked.add(c.file_path)
+                log.error(
+                    "Staging: Umbenennen von %s uebersprungen - Zieldatei %s "
+                    "existiert bereits",
+                    c.file_path.name, target.name,
+                )
+        return blocked
 
     def _resolve_target(self, original: Path, dest_root: Optional[Path]) -> Path:
         if dest_root is None or self._sd_root is None:
