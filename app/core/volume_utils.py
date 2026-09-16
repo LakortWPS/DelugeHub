@@ -38,3 +38,34 @@ def amp_to_vol(amp: float) -> str:
     amp = max(0.0, min(1.0, amp))
     v = int(amp * 4_294_967_295) - 2_147_483_648
     return f"0x{v & 0xFFFFFFFF:08X}"
+
+
+def apply_sequential_replacements(text: str, replacements: list[tuple[str, str]]) -> tuple[str, int]:
+    """
+    Apply each (old, new) pair in `replacements` to `text`, one occurrence
+    each, in the given order — never searching before the position where
+    the previous replacement landed.
+
+    Several pads/clips in the same Kit/Song XML can share the exact same
+    literal volume tag text (e.g. an untouched default value repeated on
+    multiple pads). A plain `text.replace(old, new, 1)` call always hits
+    the FIRST occurrence in the whole text, so calling it once per pad
+    without tracking where earlier edits already landed can silently
+    rewrite the wrong pad's volume. Anchoring the search position after
+    each match keeps every replacement scoped to "the next not-yet-
+    consumed occurrence", matching the left-to-right document order the
+    caller collected `replacements` in (i.e. the same order as
+    `soundSources.findall("sound")`/etc.).
+
+    Returns the modified text and how many replacements actually matched.
+    """
+    changed = 0
+    search_pos = 0
+    for old, new in replacements:
+        idx = text.find(old, search_pos)
+        if idx == -1:
+            continue
+        text = text[:idx] + new + text[idx + len(old):]
+        search_pos = idx + len(new)
+        changed += 1
+    return text, changed

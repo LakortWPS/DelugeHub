@@ -19,7 +19,10 @@ from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Kit
 from ..core.staging import StagingStore, PendingChange, ChangeType
-from ..core.volume_utils import vol_to_display, display_to_vol, vol_to_amp, amp_to_vol
+from ..core.volume_utils import (
+    vol_to_display, display_to_vol, vol_to_amp, amp_to_vol,
+    apply_sequential_replacements,
+)
 
 log = logging.getLogger(__name__)
 
@@ -394,8 +397,19 @@ class KitManagerModule(QWidget):
         refs = kit.pad_refs
         if self._selected_pad < len(refs) and refs[self._selected_pad] is not None:
             old_rel = refs[self._selected_pad].path
-            from ..core.file_ops import compute_xml_path_update, _write_xml
-            result = compute_xml_path_update(kit.file_path, old_rel, new_rel)
+            from ..core.file_ops import compute_xml_path_update_at, _write_xml
+
+            # Two pads can reference the exact same sample. A plain
+            # whole-file replace would repoint every pad using old_rel,
+            # not just this one - so find which occurrence (in document
+            # order) belongs to *this* pad by counting identical
+            # references on earlier pads.
+            old_rel_fwd = old_rel.replace("\\", "/")
+            occurrence_index = sum(
+                1 for r in refs[:self._selected_pad]
+                if r is not None and r.path.replace("\\", "/") == old_rel_fwd
+            )
+            result = compute_xml_path_update_at(kit.file_path, old_rel, new_rel, occurrence_index)
             if result is None:
                 self._status.setText("ℹ  Pfad konnte nicht im XML gefunden werden.")
                 return
@@ -593,6 +607,16 @@ class KitManagerModule(QWidget):
                 "  pip install soundfile"
             )
             return
+        except OSError as e:
+            # soundfile IS installed but its native libsndfile library
+            # isn't present on this system - raised as OSError at import
+            # time, not ImportError, so it needs its own except clause.
+            QMessageBox.warning(
+                self, "Fehlende Bibliothek",
+                f"soundfile ist installiert, aber die native libsndfile-Bibliothek "
+                f"fehlt auf diesem System:\n\n{e}"
+            )
+            return
 
         for pad in pads:
             try:
@@ -628,23 +652,18 @@ class KitManagerModule(QWidget):
             return
 
         sources_block = sources_match.group(1)
-        changed = 0
-        search_pos = 0
+        replacements = []
         for pad in valid_pads:
             if not (pad["new_vol"] and pad["new_vol"] != pad["current_vol"]):
                 continue
             if pad["vol_format"] == "attr":
-                old_tag = f'volume="{pad["current_vol"]}"'
-                new_tag = f'volume="{pad["new_vol"]}"'
+                replacements.append((f'volume="{pad["current_vol"]}"', f'volume="{pad["new_vol"]}"'))
             else:
-                old_tag = f'<volume>{pad["current_vol"]}</volume>'
-                new_tag = f'<volume>{pad["new_vol"]}</volume>'
-
-            idx = sources_block.find(old_tag, search_pos)
-            if idx != -1:
-                sources_block = sources_block[:idx] + new_tag + sources_block[idx + len(old_tag):]
-                search_pos = idx + len(new_tag)
-                changed += 1
+                replacements.append((
+                    f'<volume>{pad["current_vol"]}</volume>',
+                    f'<volume>{pad["new_vol"]}</volume>',
+                ))
+        sources_block, changed = apply_sequential_replacements(sources_block, replacements)
 
         if changed == 0:
             self._status.setText("ℹ  Keine Änderungen nötig — alle Pads bereits auf gleicher Lautstärke.")
@@ -834,17 +853,13 @@ class KitManagerModule(QWidget):
             return
 
         sources_block = sources_match.group(1)
-        changed = 0
+        replacements = []
         for current_hex, new_hex, fmt in caps:
             if fmt == "attr":
-                old_tag, new_tag = f'volume="{current_hex}"', f'volume="{new_hex}"'
+                replacements.append((f'volume="{current_hex}"', f'volume="{new_hex}"'))
             else:
-                old_tag = f'<volume>{current_hex}</volume>'
-                new_tag = f'<volume>{new_hex}</volume>'
-            new_block = sources_block.replace(old_tag, new_tag, 1)
-            if new_block != sources_block:
-                sources_block = new_block
-                changed += 1
+                replacements.append((f'<volume>{current_hex}</volume>', f'<volume>{new_hex}</volume>'))
+        sources_block, changed = apply_sequential_replacements(sources_block, replacements)
 
         if changed == 0:
             self._status.setText("ℹ  Keine Änderungen vorgenommen.")

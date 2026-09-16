@@ -1,6 +1,6 @@
 # DelugeHub — Projektstand
 
-**Stand:** 2026-06-30  
+**Stand:** 2026-09-16  
 **Version:** 2.2.2 (Branch: `main`)
 
 ---
@@ -51,15 +51,16 @@ DelugeHub/
 
 | Hash | Branch | Beschreibung |
 |------|--------|-------------|
-| `a78ead6` | `main` | chore: bump version to 2.0.0 (staging system major release) |
-| `19855ff` | `main` | feat: backup supports exclude_samples option |
-| `129ee85` | `main` | feat: batch_hub uses StagingStore |
-| `1d1dee9` | `main` | feat: synth_editor uses StagingStore |
-| `f01b1ac` | `main` | feat: kit_manager uses StagingStore |
-| `c0da3ca` | `main` | feat: song_manager uses StagingStore |
-| `4c7fa9d` | `main` | feat: add StagingStore to MainWindow + status bar badge |
-| `8729152` | `main` | feat: add PendingPanel widget |
-| `f27a17e` | `main` | feat: add StagingStore core module |
+| `7d450c8` | `main` | release: v2.2.2 — Bugfixes + Python 3.9 + Icon-Fix |
+| `fea7501` | `main` | chore: Version bump 2.2.2 |
+| `9474d36` | `main` | fix: Icon als eingebettete Bytes laden (kein Dateipfad, PyInstaller-sicher) |
+| `14835e6` | `main` | fix: Windows AppUserModelID für korrektes Icon in Taskleiste + Fenster |
+| `0699cb9` | `main` | fix: Python 3.9 Kompatibilität in synth_utils (list[str] \| None) |
+| `b676d79` | `main` | fix: Bug #1-4 + Issue #1 aus Code-Audit |
+| `b244efd` | `main` | v2.2.1: Keyboard-Shortcuts, globale Suche, Replace-Vorschau + Bugfixes |
+| `2fa0549` | `main` | fix: icon in taskbar bei PyInstaller-Build (sys._MEIPASS + datas) |
+| `95dc555` | `main` | fix: restore missing batch_hub methods lost during rebase |
+| `5f537c1` | `main` | Remove outdated sections from README |
 
 ---
 
@@ -88,17 +89,20 @@ Alle destruktiven Operationen (XML-Edit, Rename, Delete) werden jetzt gepuffert 
 - Beim Speichern: Original überschreiben ODER in anderen Ordner exportieren
 - Beim App-Start mit SD-Card: Restore-Dialog wenn Session-Pending vorhanden
 
-### Line-Ending-Drift (noch offen)
-Mehrere Dateien auf `main` zeigen `M`-Status (CRLF↔LF), kein inhaltlicher Code-Unterschied. Noch nicht bereinigt.
+### Line-Endings — erledigt
+`.gitattributes` erzwingt `* text=auto` + explizite `eol=lf`-Regeln für `.py`/`.md`/`.txt`/`.yml`/`.yaml`/`.json`. Verifiziert per `git grep` auf `\r` in `*.py`: 0 Treffer. Kein offener Punkt mehr.
+
+### History-System — erledigt
+`app/core/history.py` existiert (`ActionHistory`, `Action`, `move_to_trash`/`restore_from_trash`). `main_window.py` (Zeile ~434) verdrahtet es aktiv: `for module in self._modules.values(): if hasattr(module, "set_history"): module.set_history(self._history)`. Die `if self._history:`-Guards in `kit_manager.py`, `lost_sample_finder.py`, `sample_manager.py`, `synth_editor.py` sind kein toter Code — `self._history` ist zur Laufzeit ein initialisiertes `ActionHistory`-Objekt.
+
+### Volume-Helper — kein Duplikat
+`kit_manager.py` und `batch_hub.py` importieren beide `vol_to_display`/`display_to_vol` aus der gemeinsamen `core/volume_utils.py` (kein lokal duplizierter Code).
 
 ---
 
 ## Offene Punkte / Nächste Schritte
 
-1. **Line-Endings bereinigen** — `.gitattributes` mit `* text=auto` + `git add --renormalize .`
-2. **Minor/Code-Quality (aufgeschoben):**
-   - History-System nie initialisiert — toter Code in allen Modulen (`_history` immer `None`)
-   - Volume-Helper (`_vol_to_display` / `_display_to_vol`) dupliziert in `kit_manager` + `batch_hub`
+Aktuell keine bekannten offenen Punkte aus früheren Audits — die drei oben genannten wurden mit Stand 2026-09-16 verifiziert und sind erledigt. Neue offene Punkte hier eintragen, sobald sie identifiziert sind.
 
 ---
 
@@ -107,7 +111,7 @@ Mehrere Dateien auf `main` zeigen `M`-Status (CRLF↔LF), kein inhaltlicher Code
 - **XML lesen:** immer `_parse_xml_robust(path)` aus `core/xml_parser.py` — niemals `ET.parse()`
 - **Dateien lesen/schreiben:** immer `_read_xml(path)` / `_write_xml(path, content, enc)` aus `core/file_ops.py`
 - **Glob auf Linux:** immer beide Patterns `*.XML` + `*.xml` sammeln
-- `core/history.py` existiert nicht — alle `if self._history:` Guards sind toter Code
+- `core/history.py` existiert und ist über `main_window.py` an alle Module mit `set_history` verdrahtet — nicht erneut anlegen
 
 ## Skills & Workflows
 
