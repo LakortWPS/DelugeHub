@@ -122,6 +122,72 @@ def update_xml_path(xml_file: Path, old_rel: str, new_rel: str) -> bool:
         return False
 
 
+def _find_nth_path_occurrence(
+    text: str, old_fwd: str, old_bwd: str, n: int
+) -> Optional[tuple[int, int, bool]]:
+    """
+    Find the n-th (0-based) occurrence of old_fwd or old_bwd in text,
+    scanning strictly left to right across both slash variants combined.
+    Returns (start_index, match_length, matched_forward_variant) or None
+    if there is no n-th occurrence.
+    """
+    pos = 0
+    count = 0
+    while True:
+        idx_fwd = text.find(old_fwd, pos) if old_fwd else -1
+        idx_bwd = text.find(old_bwd, pos) if old_bwd and old_bwd != old_fwd else -1
+        candidates = [(i, is_fwd, s) for i, is_fwd, s in
+                      ((idx_fwd, True, old_fwd), (idx_bwd, False, old_bwd)) if i != -1]
+        if not candidates:
+            return None
+        idx, is_fwd, matched = min(candidates, key=lambda c: c[0])
+        if count == n:
+            return idx, len(matched), is_fwd
+        count += 1
+        pos = idx + len(matched)
+
+
+def compute_xml_path_update_at(
+    xml_file: Path, old_rel: str, new_rel: str, occurrence_index: int
+) -> Optional[tuple[str, str]]:
+    """
+    Like compute_xml_path_update, but replaces only the occurrence_index-th
+    (0-based, left-to-right, forward+backward slash variants combined)
+    occurrence of old_rel in the file - not every occurrence.
+
+    Needed wherever old_rel is not guaranteed to be unique to the specific
+    element being edited - e.g. two kit pads referencing the exact same
+    sample file. A plain compute_xml_path_update() there would repoint
+    every pad using that sample, not just the one the caller means to
+    change. The caller is responsible for determining occurrence_index
+    from the same document-order traversal it used to identify the target
+    element (e.g. counting how many earlier pads share the same path).
+
+    Returns (new_text, encoding) if the occurrence was found and replacing
+    it would change the file, or None otherwise.
+    """
+    try:
+        text, enc = _read_xml(xml_file)
+
+        old_fwd = old_rel.replace("\\", "/")
+        new_fwd = new_rel.replace("\\", "/")
+        old_bwd = old_rel.replace("/", "\\")
+        new_bwd = new_rel.replace("/", "\\")
+
+        found = _find_nth_path_occurrence(text, old_fwd, old_bwd, occurrence_index)
+        if found is None:
+            return None
+        idx, length, is_fwd = found
+        replacement = new_fwd if is_fwd else new_bwd
+        new_text = text[:idx] + replacement + text[idx + length:]
+        if new_text == text:
+            return None
+        return new_text, enc
+    except Exception as e:
+        log.error(f"compute_xml_path_update_at failed for {xml_file}: {e}")
+        return None
+
+
 def find_referencing_xmls(sd_root: Path, rel_path: str) -> list[Path]:
     """Return all XML files that contain rel_path."""
     fwd = rel_path.replace("\\", "/")

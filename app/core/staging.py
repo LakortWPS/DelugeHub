@@ -74,9 +74,13 @@ def plan_global_replace(
     matching XML across SONGS/KITS/SYNTHS being overwritten immediately.
 
     Files that fail to read, or in which neither replacement produces a
-    change, are skipped (not included in the result).
+    change, are skipped (not included in the result). A file whose result
+    would no longer be parseable XML is also skipped — rather than staging
+    (and, on Save, writing) a change that could leave the Deluge unable to
+    load that file — and logged as a warning so the skip is visible.
     """
     from .file_ops import _read_xml
+    from .xml_parser import validate_xml_text
 
     find_fwd = find_text.replace("\\", "/")
     replace_fwd = replace_text.replace("\\", "/")
@@ -92,14 +96,24 @@ def plan_global_replace(
 
         new_text = text.replace(find_fwd, replace_fwd).replace(find_bwd, replace_bwd)
 
-        if new_text != text:
-            changes.append(PendingChange(
-                change_type=ChangeType.XML_EDIT,
-                file_path=xml_file,
-                source_module=source_module,
-                new_content=new_text,
-                encoding=enc,
-            ))
+        if new_text == text:
+            continue
+
+        error = validate_xml_text(new_text, context=str(xml_file))
+        if error is not None:
+            log.warning(
+                "plan_global_replace: %s uebersprungen - Ergebnis waere kein "
+                "gueltiges XML mehr (%s)", xml_file.name, error,
+            )
+            continue
+
+        changes.append(PendingChange(
+            change_type=ChangeType.XML_EDIT,
+            file_path=xml_file,
+            source_module=source_module,
+            new_content=new_text,
+            encoding=enc,
+        ))
 
     return changes
 
@@ -188,10 +202,15 @@ class StagingStore:
 
     def _apply(self, changes: list[PendingChange], dest_root: Optional[Path]) -> tuple[int, int]:
         from .file_ops import _write_xml
+        from .history import move_to_trash
         success = failed = 0
         applied_paths = []
+        blocked = self._blocked_rename_sources(changes, dest_root)
 
         for c in changes:
+            if c.file_path in blocked:
+                failed += 1
+                continue
             try:
                 target = self._resolve_target(c.file_path, dest_root)
 
@@ -209,8 +228,8 @@ class StagingStore:
                         c.file_path.rename(new_path)
 
                 elif c.change_type == ChangeType.DELETE:
-                    if not dest_root:
-                        c.file_path.unlink(missing_ok=True)
+                    if not dest_root and c.file_path.exists():
+                        move_to_trash(c.file_path)
 
                 applied_paths.append(c.file_path)
                 success += 1
@@ -222,6 +241,51 @@ class StagingStore:
             self._changes.pop(p, None)
         self._autosave()
         return success, failed
+
+    def _blocked_rename_sources(
+        self, changes: list[PendingChange], dest_root: Optional[Path]
+    ) -> set[Path]:
+        """
+        Refuse RENAME changes whose target filename would silently overwrite
+        an existing file - either another file already on disk, or another
+        change in this same batch that resolves to the same target name
+        (e.g. a batch-rename pattern without {index} collapsing several
+        files onto one name). Path.rename()/shutil.copy2() would otherwise
+        overwrite the target with no warning and no way to get it back.
+
+        Returns the set of source file_paths whose rename must be skipped.
+        """
+        rename_changes = [c for c in changes if c.change_type == ChangeType.RENAME]
+        if not rename_changes:
+            return set()
+
+        targets_by_source: dict[Path, Path] = {}
+        target_counts: dict[Path, int] = {}
+        for c in rename_changes:
+            target = self._resolve_target(c.file_path, dest_root).parent / c.new_name
+            targets_by_source[c.file_path] = target
+            target_counts[target] = target_counts.get(target, 0) + 1
+
+        blocked: set[Path] = set()
+        for c in rename_changes:
+            target = targets_by_source[c.file_path]
+            if target == c.file_path:
+                continue  # no-op rename (new name == current name)
+            if target_counts[target] > 1:
+                blocked.add(c.file_path)
+                log.error(
+                    "Staging: Umbenennen von %s uebersprungen - Zielname %s wird "
+                    "von mehreren Aenderungen in diesem Batch belegt",
+                    c.file_path.name, target.name,
+                )
+            elif target.exists():
+                blocked.add(c.file_path)
+                log.error(
+                    "Staging: Umbenennen von %s uebersprungen - Zieldatei %s "
+                    "existiert bereits",
+                    c.file_path.name, target.name,
+                )
+        return blocked
 
     def _resolve_target(self, original: Path, dest_root: Optional[Path]) -> Path:
         if dest_root is None or self._sd_root is None:

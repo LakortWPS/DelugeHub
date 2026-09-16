@@ -394,6 +394,18 @@ class LostSampleFinderModule(QWidget):
         self._progress.setVisible(False)
         for row in range(self._table.rowCount()):
             self._refresh_row(row)
+            # Rows start pre-checked (before any match is known). Only a
+            # single, unambiguous filename match ("exact") is safe to
+            # leave checked for one-click "Fixes anwenden" - "exact_multi"
+            # (same filename exists in several places, resolved by a
+            # best-guess path heuristic) and "fuzzy" (similarity match,
+            # possibly a different sound entirely) must be reviewed and
+            # opted into by hand, so they get unchecked here.
+            ref = self._get_ref(row)
+            if ref and ref.match_confidence not in ("exact", "manual"):
+                chk = self._table.item(row, COL_SEL)
+                if chk:
+                    chk.setCheckState(Qt.Unchecked)
         matched = sum(1 for r in refs if r.match)
         total = len(refs)
         self._stats_label.setText(

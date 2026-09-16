@@ -22,7 +22,10 @@ from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex
 from ..core.staging import StagingStore, PendingChange, ChangeType
-from ..core.volume_utils import vol_to_display as _vol_to_display, display_to_vol as _display_to_vol
+from ..core.volume_utils import (
+    vol_to_display as _vol_to_display, display_to_vol as _display_to_vol,
+    apply_sequential_replacements,
+)
 
 log = logging.getLogger(__name__)
 
@@ -291,13 +294,13 @@ class BatchWorker(QThread):
             return None
 
         block = sources_match.group(1)
+        replacements = []
         for current_hex, new_hex, fmt in caps:
             if fmt == "attr":
-                old_tag, new_tag = f'volume="{current_hex}"', f'volume="{new_hex}"'
+                replacements.append((f'volume="{current_hex}"', f'volume="{new_hex}"'))
             else:
-                old_tag = f'<volume>{current_hex}</volume>'
-                new_tag = f'<volume>{new_hex}</volume>'
-            block = block.replace(old_tag, new_tag, 1)
+                replacements.append((f'<volume>{current_hex}</volume>', f'<volume>{new_hex}</volume>'))
+        block, _changed = apply_sequential_replacements(block, replacements)
 
         s, e = sources_match.start(1), sources_match.end(1)
         new_text = text[:s] + block + text[e:]
@@ -1071,9 +1074,11 @@ class BatchHubModule(QWidget):
             return
 
         changes = plan_global_replace(xml_files, find_text, replace_text)
+        skipped = len(preview) - len(changes)
+        skip_note = f" ({skipped} übersprungen — Ergebnis wäre kein gültiges XML)" if skipped > 0 else ""
 
         if not changes:
-            self._status.setText("ℹ  Keine Treffer — keine Datei geändert.")
+            self._status.setText(f"ℹ  Keine Datei geändert.{skip_note}")
             return
 
         if self._staging:
@@ -1082,11 +1087,11 @@ class BatchHubModule(QWidget):
             # matching XML across SONGS/KITS/SYNTHS with no way back.
             for c in changes:
                 self._staging.add(c)
-            self._status.setText(f"⏳  {len(changes)} XML-Dateien vorgemerkt (Staging).")
+            self._status.setText(f"⏳  {len(changes)} XML-Dateien vorgemerkt (Staging).{skip_note}")
             self._pending_panel.refresh()
         else:
             from ..core.file_ops import _write_xml
             for c in changes:
                 _write_xml(c.file_path, c.new_content, c.encoding)
-            self._status.setText(f"✅  {len(changes)} XML-Dateien aktualisiert.")
+            self._status.setText(f"✅  {len(changes)} XML-Dateien aktualisiert.{skip_note}")
             self.request_rescan.emit()
