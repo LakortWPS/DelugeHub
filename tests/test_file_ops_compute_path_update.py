@@ -106,3 +106,12 @@ def test_update_xml_path_returns_false_when_no_match(tmp_path):
     changed = update_xml_path(f, "SAMPLES/KICK/old.wav", "SAMPLES/KICK/new.wav")
     assert changed is False
     assert f.read_text(encoding="utf-8") == original
+
+
+def test_bounded_replace_keeps_longer_token_with_same_prefix():
+    """SAMPLES/a.wav must not rewrite SAMPLES/a.wav.bak (no second boundary logic)."""
+    text = '<osc1 fileName="SAMPLES/a.wav"></osc1>SAMPLES/a.wav.bak'
+    new = file_ops.replace_bounded_sample_path(text, "SAMPLES/a.wav", "SAMPLES/b.wav")
+    assert 'fileName="SAMPLES/b.wav"' in new
+    assert "SAMPLES/a.wav.bak" in new
+    assert "SAMPLES/b.wav.bak" not in new

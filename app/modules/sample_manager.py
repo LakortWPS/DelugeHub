@@ -13,13 +13,20 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
     QHeaderView, QSplitter, QFrame, QAbstractItemView,
     QFileDialog, QInputDialog, QMessageBox, QLineEdit,
-    QProgressBar, QSizePolicy
+    QProgressBar, QSizePolicy, QDialog, QScrollArea, QComboBox,
+    QDialogButtonBox
 )
 from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QLinearGradient, QBrush
 
 from ..core.models import SDCardIndex, Sample
-from ..core.file_ops import rename_sample, move_sample, delete_sample, copy_file_to_sd
+from ..core.file_ops import (
+    rename_sample, move_sample, delete_sample, copy_file_to_sd,
+    identical_sample_groups, preferred_keep_index,
+    replace_bounded_sample_path, find_referencing_xmls, _read_xml,
+)
+from ..core.staging import StagingStore, PendingChange, ChangeType
+from ..core.xml_parser import validate_xml_text
 
 log = logging.getLogger(__name__)
 
@@ -255,9 +262,28 @@ class AudioPlayer:
         return self._has_sf
 
 
+class _HashWorker(QThread):
+    """Hash sample bytes off the UI thread. Writes nothing."""
+    groups_ready = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, samples):
+        super().__init__()
+        self._samples = list(samples)
+
+    def run(self):
+        try:
+            self.groups_ready.emit(identical_sample_groups(self._samples))
+        except Exception as e:
+            log.error("Inhaltsvergleich fehlgeschlagen: %s", e)
+            self.failed.emit(str(e))
+
+
 # ── Sample Manager ─────────────────────────────────────────────────────────
 class SampleManagerModule(QWidget):
     request_rescan = Signal()
+    open_path = Signal(str, object)
+    pending_changed = Signal()
 
     def __init__(self):
         super().__init__()
@@ -265,6 +291,8 @@ class SampleManagerModule(QWidget):
         self._player = AudioPlayer()
         self._current_sample: Optional[Sample] = None
         self._history = None
+        self._staging: Optional[StagingStore] = None
+        self._hash_worker = None
         self._build_ui()
 
     def _build_ui(self):
@@ -296,9 +324,18 @@ class SampleManagerModule(QWidget):
         self._dupes_btn.clicked.connect(self._find_duplicates)
         self._dupes_btn.setFixedHeight(36)
 
+        self._content_btn = QPushButton("Gleicher Inhalt")
+        self._content_btn.setObjectName("SecondaryButton")
+        self._content_btn.setToolTip(
+            "Gleiche Audiodatei unter verschiedenen Namen. Zusammenführen wird erst beim Speichern geschrieben."
+        )
+        self._content_btn.clicked.connect(self._find_identical)
+        self._content_btn.setFixedHeight(36)
+
         hdr.addWidget(self._import_btn)
         hdr.addWidget(self._unused_btn)
         hdr.addWidget(self._dupes_btn)
+        hdr.addWidget(self._content_btn)
         root.addLayout(hdr)
         root.addSpacing(14)
 
@@ -393,6 +430,7 @@ class SampleManagerModule(QWidget):
         self._usage_list = QTreeWidget()
         self._usage_list.setHeaderHidden(True)
         self._usage_list.setMaximumHeight(140)
+        self._usage_list.itemClicked.connect(self._on_usage_clicked)
         detail_layout.addWidget(self._usage_list)
 
         # Actions
@@ -431,6 +469,13 @@ class SampleManagerModule(QWidget):
         root.addSpacing(6)
         root.addWidget(self._status)
 
+        from ..widgets.pending_panel import PendingPanel
+        self._pending_panel = PendingPanel(
+            "sample_manager", StagingStore(),
+            rescan_fn=self.request_rescan.emit,
+        )
+        root.addWidget(self._pending_panel)
+
     def _lbl(self, text, obj=""):
         l = QLabel(text)
         if obj:
@@ -441,6 +486,12 @@ class SampleManagerModule(QWidget):
     def set_history(self, history):
         """Register the ActionHistory for undo/redo."""
         self._history = history
+
+    def set_staging(self, staging: StagingStore):
+        self._staging = staging
+        if hasattr(self, "_pending_panel"):
+            self._pending_panel._staging = staging
+            self._pending_panel.refresh()
 
     def update_index(self, index: SDCardIndex):
         self._index = index
@@ -595,14 +646,13 @@ class SampleManagerModule(QWidget):
         else:
             self._waveform.clear()
 
-        # Usage tree
+        # Usage tree — every reference, the 140 px tree scrolls.
         self._usage_list.clear()
-        for ref_path in s.referenced_by[:20]:
+        for ref_path in s.referenced_by:
             item = QTreeWidgetItem([ref_path.name])
             item.setToolTip(0, str(ref_path))
+            item.setData(0, Qt.UserRole, ref_path)
             self._usage_list.addTopLevelItem(item)
-        if len(s.referenced_by) > 20:
-            QTreeWidgetItem(self._usage_list, [f"… +{len(s.referenced_by)-20} weitere"])
 
         if not s.is_used:
             unused_lbl = QTreeWidgetItem(self._usage_list, ["⚠ Ungenutzt"])
@@ -632,6 +682,18 @@ class SampleManagerModule(QWidget):
         else:
             self._play_btn.setToolTip("")
         self._stop_btn.setEnabled(True)
+
+    def _on_usage_clicked(self, item, _column):
+        path = item.data(0, Qt.UserRole) if item is not None else None
+        if not isinstance(path, Path):
+            self._status.setText("Kein Sprungziel.")
+            return
+        from ..core.search import module_key_for_path
+        key = module_key_for_path(self._index, path) if self._index else None
+        if not key:
+            self._status.setText("Datei nicht im Index.")
+            return
+        self.open_path.emit(key, Path(path))
 
     def _play_selected(self):
         if self._current_sample and self._player.available:
@@ -789,6 +851,192 @@ class SampleManagerModule(QWidget):
         dupes = [s for samples in seen.values() if len(samples) > 1 for s in samples]
         self._populate_table(dupes)
         self._status.setText(f"{len(dupes)} potenzielle Duplikate (gleicher Dateiname).")
+
+    def _find_identical(self):
+        if not self._index:
+            return
+        if self._hash_worker and self._hash_worker.isRunning():
+            self._status.setText("Vergleich läuft noch…")
+            return
+        self._content_btn.setEnabled(False)
+        self._status.setText("Inhalte werden verglichen…")
+        self._hash_worker = _HashWorker(self._index.samples)
+        self._hash_worker.groups_ready.connect(self._on_identical_groups)
+        self._hash_worker.failed.connect(self._on_identical_failed)
+        self._hash_worker.start()
+
+    def _on_identical_failed(self, message: str):
+        self._content_btn.setEnabled(True)
+        self._status.setText(f"Inhaltsvergleich fehlgeschlagen: {message}")
+
+    def _on_identical_groups(self, groups):
+        self._content_btn.setEnabled(True)
+        wasted = sum(group.wasted_bytes for group in groups)
+        mb = wasted / (1024 * 1024)
+        self._status.setText(f"{len(groups)} Gruppen, {mb:.1f} MB verschenkt")
+        if not groups:
+            return
+        chosen = self._ask_identical_keep(groups)
+        if not chosen:
+            return
+        self._merge_identical(chosen, len(groups), mb)
+
+    def _ask_identical_keep(self, groups):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Gleicher Inhalt")
+        dlg.resize(560, 440)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("Gleiche Dateien. Wähle pro Gruppe, welche behalten wird."))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        combos = []
+        for group in groups:
+            inner_layout.addWidget(QLabel(
+                f"{len(group.members)} Dateien, {group.wasted_bytes} Bytes verschenkt"
+            ))
+            combo = QComboBox()
+            for sample in group.members:
+                try:
+                    rel = str(sample.file_path.relative_to(self._index.root_path)).replace("\\", "/")
+                except (ValueError, AttributeError):
+                    rel = str(sample.file_path)
+                combo.addItem(f"{sample.name}  ({rel})", sample)
+            combo.setCurrentIndex(preferred_keep_index(group.members))
+            inner_layout.addWidget(QLabel("Behalten"))
+            inner_layout.addWidget(combo)
+            combos.append(combo)
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Zusammenführen")
+        buttons.button(QDialogButtonBox.Cancel).setText("Abbrechen")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return [
+            (group, combos[i].currentData())
+            for i, group in enumerate(groups)
+            if combos[i].currentData() is not None
+        ]
+
+    def _staging_change_for(self, path: Path):
+        if self._staging is None:
+            return None
+        for change in self._staging.get_all():
+            if change.file_path == path:
+                return change
+        return None
+
+    def _merge_identical(self, chosen, group_count: int, mb: float):
+        if not self._index:
+            return
+        if self._staging is None:
+            self._status.setText("Kein Zwischenspeicher — nichts vorgemerkt.")
+            return
+        root = self._index.root_path
+        blocked = (
+            "Zusammenführen abgebrochen: für eine Datei liegt schon eine "
+            "Umbenennung oder Löschung vor."
+        )
+
+        def _rel(sample) -> str:
+            return str(sample.file_path.relative_to(root)).replace("\\", "/")
+
+        drops = []
+        for group, keep in chosen:
+            for sample in group.members:
+                if sample.file_path == keep.file_path:
+                    continue
+                existing = self._staging_change_for(sample.file_path)
+                if existing is not None and existing.change_type in (ChangeType.RENAME, ChangeType.DELETE):
+                    self._status.setText(blocked)
+                    return
+                drops.append((sample, keep))
+
+        xml_state = {}
+        try:
+            for sample, keep in drops:
+                old_rel = _rel(sample)
+                new_rel = _rel(keep)
+                for xml_path in find_referencing_xmls(root, old_rel):
+                    if xml_path not in xml_state:
+                        existing = self._staging_change_for(xml_path)
+                        if existing is not None and existing.change_type in (
+                            ChangeType.RENAME, ChangeType.DELETE
+                        ):
+                            self._status.setText(blocked)
+                            return
+                        if (
+                            existing is not None
+                            and existing.change_type == ChangeType.XML_EDIT
+                            and existing.new_content is not None
+                        ):
+                            text = existing.new_content
+                            enc = existing.encoding or "utf-8"
+                            source = existing.source_module
+                            store_path = existing.file_path
+                        else:
+                            text, enc = _read_xml(xml_path)
+                            source = "sample_manager"
+                            store_path = xml_path
+                        xml_state[xml_path] = {
+                            "text": text,
+                            "original": text,
+                            "enc": enc,
+                            "source": source,
+                            "store_path": store_path,
+                        }
+                    xml_state[xml_path]["text"] = replace_bounded_sample_path(
+                        xml_state[xml_path]["text"], old_rel, new_rel
+                    )
+        except ValueError:
+            self._status.setText("Zusammenführen abgebrochen: Datei liegt nicht auf der Karte.")
+            return
+        except Exception as e:
+            self._status.setText(f"Zusammenführen abgebrochen: {e}")
+            return
+
+        prepared = []
+        for xml_path, state in xml_state.items():
+            if state["text"] == state["original"]:
+                continue
+            error = validate_xml_text(state["text"], context=str(xml_path))
+            if error is not None:
+                self._status.setText(
+                    f"Zusammenführen abgebrochen: {xml_path.name} wäre kein gültiges XML mehr."
+                )
+                return
+            prepared.append(state)
+
+        for state in prepared:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.XML_EDIT,
+                file_path=state["store_path"],
+                source_module=state["source"],
+                new_content=state["text"],
+                encoding=state["enc"],
+            ))
+        for sample, _keep in drops:
+            self._staging.add(PendingChange(
+                change_type=ChangeType.DELETE,
+                file_path=sample.file_path,
+                source_module="sample_manager",
+            ))
+        self._pending_panel.refresh()
+        self.pending_changed.emit()
+        other = sorted({
+            state["source"] for state in prepared if state["source"] != "sample_manager"
+        })
+        extra = ""
+        if other:
+            extra = " XML-Änderungen an schon vorgemerkten Dateien bleiben in deren Modul — speichere die zuerst."
+        self._status.setText(
+            f"{group_count} Gruppen, {mb:.1f} MB verschenkt. Vorgemerkt, noch nicht auf der Karte.{extra}"
+        )
 
     # ── Context menu ───────────────────────────────────────────────────────
     def _context_menu(self, pos):

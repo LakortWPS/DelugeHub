@@ -39,6 +39,7 @@ def _load_core_module(name):
 models = _load_core_module("models")
 search_mod = _load_core_module("search")
 search_index = search_mod.search_index
+module_key_for_path = search_mod.module_key_for_path
 
 Song = models.Song
 Kit = models.Kit
@@ -129,3 +130,16 @@ def test_ordering_songs_kits_synths_samples():
     order = {"song": 0, "kit": 1, "synth": 2, "sample": 3}
     seq = [order[k] for k in kinds_seen]
     assert seq == sorted(seq)
+
+
+def test_module_key_follows_the_index_not_the_folder():
+    index = _make_index()
+    misplaced = Path("/sd/SONGS/NotASong.XML")
+    index.kits.append(Kit(file_path=misplaced, name="NotASong"))
+
+    assert module_key_for_path(index, Path("/sd/SONGS/Acid Track.XML")) == "song_manager"
+    assert module_key_for_path(index, Path("/sd/KITS/Acid Kit.XML")) == "kit_manager"
+    assert module_key_for_path(index, Path("/sd/SYNTHS/Lead Synth.XML")) == "synth_editor"
+    assert module_key_for_path(index, misplaced) == "kit_manager"
+    assert module_key_for_path(index, Path("/sd/SAMPLES/kick.wav")) is None
+    assert module_key_for_path(None, misplaced) is None
