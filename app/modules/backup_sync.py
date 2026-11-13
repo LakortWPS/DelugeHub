@@ -20,6 +20,7 @@ from ..core.backup import (
     BackupWorker, load_backup_history, list_zip_contents,
     restore_from_backup, BackupEntry
 )
+from ..widgets.table_sort import TableSort
 
 
 class RestoreWorker(QThread):
@@ -168,6 +169,12 @@ class BackupSyncModule(QWidget):
         self._history_table.setColumnWidth(2, 75)
         self._history_table.setColumnWidth(3, 75)
         self._history_table.itemSelectionChanged.connect(self._on_backup_selected)
+        self._table_sort = TableSort(self._history_table, {
+            0: "text",
+            1: "text",
+            2: "size",
+            3: "number",
+        })
         history_layout.addWidget(self._history_table, 1)
 
         # History actions
@@ -330,6 +337,7 @@ class BackupSyncModule(QWidget):
             self._history_table.setItem(row, 1, QTableWidgetItem(entry.label))
             self._history_table.setItem(row, 2, QTableWidgetItem(f"{entry.size_mb:.0f} MB"))
             self._history_table.setItem(row, 3, QTableWidgetItem(str(entry.file_count)))
+        self._table_sort.note_original_order()
 
         self._status.setText(f"{len(self._entries)} Backups gefunden.")
 

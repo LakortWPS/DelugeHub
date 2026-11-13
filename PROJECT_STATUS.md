@@ -106,6 +106,10 @@ Alle destruktiven Operationen (XML-Edit, Rename, Delete) werden jetzt gepuffert 
 
 ---
 
+### Sichtbar im UI
+
+- Tabellenköpfe sortieren in drei Stufen (aufsteigend, absteigend, ursprüngliche Reihenfolge). Nur Ansicht, Batch-Namen bleiben an der Füll-Reihenfolge
+
 ## Offene Punkte / Nächste Schritte
 
 Aktuell keine bekannten offenen Punkte aus früheren Audits — die drei oben genannten wurden mit Stand 2026-09-16 verifiziert und sind erledigt. Neue offene Punkte hier eintragen, sobald sie identifiziert sind.

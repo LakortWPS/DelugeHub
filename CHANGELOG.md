@@ -5,6 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Spalten sortieren**: Ein Klick auf die Spaltenüberschrift sortiert aufsteigend (A–Z bzw. klein nach groß), der nächste absteigend, der dritte stellt die Reihenfolge vom letzten Füllen wieder her. Nur die Anzeige — Dateien, XML und die Batch-Umbenennung bleiben an der ursprünglichen Zeile
+
+---
+
 ## [2.2.3] — 2026-09-16
 
 ### Added

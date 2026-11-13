@@ -21,6 +21,7 @@ from ..core.models import SDCardIndex, Song
 from ..core.file_ops import update_xml_path
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import vol_to_display, display_to_vol
+from ..widgets.table_sort import TableSort
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +143,13 @@ class SongManagerModule(QWidget):
         self._table.setColumnWidth(COL_MISSING, 80)
         self._table.setColumnWidth(COL_SIZE, 75)
         self._table.itemSelectionChanged.connect(self._on_selection)
+        self._table_sort = TableSort(self._table, {
+            COL_NAME: "text",
+            COL_BPM: "number",
+            COL_TRACKS: "number",
+            COL_MISSING: "number",
+            COL_SIZE: "size",
+        })
         splitter.addWidget(self._table)
 
         # Detail panel
@@ -256,6 +264,7 @@ class SongManagerModule(QWidget):
                 log.debug("Dateigröße nicht lesbar für %s: %s", s.file_path.name, e)
                 size_str = "—"
             self._table.setItem(row, COL_SIZE, QTableWidgetItem(size_str))
+        self._table_sort.note_original_order()
 
     def _filter(self):
         text = self._search.text().lower()
