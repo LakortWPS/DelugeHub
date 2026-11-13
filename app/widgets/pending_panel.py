@@ -8,7 +8,8 @@ from typing import Optional, Callable
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame, QFileDialog, QMessageBox, QListWidget, QListWidgetItem
+    QPushButton, QFrame, QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
+    QDialog, QPlainTextEdit,
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -30,6 +31,7 @@ class PendingPanel(QFrame):
         self._module = module_name
         self._staging = staging
         self._rescan_fn = rescan_fn
+        self._history = None
         self.setObjectName("PendingPanel")
         self._build_ui()
         self.refresh()
@@ -69,7 +71,12 @@ class PendingPanel(QFrame):
         self._list = QListWidget()
         self._list.setMaximumHeight(100)
         self._list.setStyleSheet("background: transparent; border: none; color: #CCCCCC;")
+        self._list.itemDoubleClicked.connect(self._show_xml_diff)
         layout.addWidget(self._list)
+
+    def set_history(self, history) -> None:
+        """Same ActionHistory main_window passes to the owning module."""
+        self._history = history
 
     def refresh(self):
         """Aktualisiert die Anzeige. Blendet Panel aus wenn keine Änderungen."""
@@ -127,16 +134,68 @@ class PendingPanel(QFrame):
         elif clicked[0] != "original":
             return
 
-        success, failed = self._staging.apply_for_module(self._module, dest_root)
+        report = self._staging.apply_for_module(self._module, dest_root)
+        if dest_root is None and self._history is not None:
+            self._push_delete_undo(report.trashed)
         self.refresh()
         self.changes_applied.emit()
         if self._rescan_fn:
             self._rescan_fn()
 
-        msg = f"✅ {success} Änderungen gespeichert."
-        if failed:
-            msg += f"  ⚠ {failed} Fehler."
+        msg = f"✅ {report.success} Änderungen gespeichert."
+        if report.failures:
+            shown = "\n".join(report.failures[:8])
+            extra = ""
+            if len(report.failures) > 8:
+                extra = f"\n… und {len(report.failures) - 8} weitere"
+            msg += f"\n\nNicht gespeichert:\n{shown}{extra}"
         QMessageBox.information(self, "Gespeichert", msg)
+
+    def _push_delete_undo(self, trashed) -> None:
+        from ..core.history import Action, move_to_trash, restore_from_trash
+        for original, trash in trashed:
+            state = [trash]
+            self._history.push(Action(
+                description=f"Gelöscht: {original.name}",
+                undo_fn=lambda st=state, op=original: restore_from_trash(st[0], op),
+                redo_fn=lambda st=state, op=original: st.__setitem__(0, move_to_trash(op)),
+            ))
+
+    def _show_xml_diff(self, item: QListWidgetItem) -> None:
+        """Line diff of a staged XML edit against the file currently on disk."""
+        import difflib
+        from ..core.file_ops import _read_xml
+        from ..core.staging import ChangeType
+
+        path = item.data(Qt.UserRole)
+        change = next(
+            (c for c in self._staging.get_for_module(self._module) if c.file_path == path),
+            None,
+        )
+        if change is None or change.change_type != ChangeType.XML_EDIT or not change.new_content:
+            return
+        try:
+            old, _enc = _read_xml(path)
+        except Exception:
+            old = ""
+        diff_lines = difflib.unified_diff(
+            old.splitlines(),
+            change.new_content.splitlines(),
+            fromfile="bisher",
+            tofile="vorgemerkt",
+            lineterm="",
+        )
+        text = "\n".join(diff_lines) or "(kein Textunterschied)"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Änderung — {path.name}")
+        layout = QVBoxLayout(dialog)
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(text)
+        layout.addWidget(view)
+        dialog.resize(720, 480)
+        dialog.exec()
 
     def _on_discard(self):
         changes = self._staging.get_for_module(self._module)

@@ -202,6 +202,8 @@ class SongManagerModule(QWidget):
 
     def set_history(self, history):
         self._history = history
+        if hasattr(self, "_pending_panel"):
+            self._pending_panel.set_history(history)
 
     def set_staging(self, staging: StagingStore):
         self._staging = staging

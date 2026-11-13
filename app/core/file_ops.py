@@ -70,11 +70,80 @@ def _all_xml_files(sd_root: Path) -> list[Path]:
     return xmls
 
 
+# A sample path in Deluge XML is either attribute text (fileName="…") or
+# element text (<fileName>…</fileName>). A bare substring match would also
+# hit a longer filename that merely starts with the same characters
+# (kick.wav inside kick.wav2).
+_PATH_BEFORE = {'"', '>'}
+_PATH_AFTER = {'"', '<'}
+
+
+def _path_variants(old_rel: str, new_rel: str) -> tuple[str, str, str, str]:
+    old_fwd = old_rel.replace("\\", "/")
+    new_fwd = new_rel.replace("\\", "/")
+    old_bwd = old_rel.replace("/", "\\")
+    new_bwd = new_rel.replace("/", "\\")
+    return old_fwd, new_fwd, old_bwd, new_bwd
+
+
+def _is_bounded_path(text: str, start: int, length: int) -> bool:
+    """True when the match sits on an XML attribute or element-text boundary."""
+    end = start + length
+    before_ok = start > 0 and text[start - 1] in _PATH_BEFORE
+    after_ok = end < len(text) and text[end] in _PATH_AFTER
+    return before_ok and after_ok
+
+
+def _next_bounded_path(
+    text: str, old_fwd: str, old_bwd: str, pos: int
+) -> Optional[tuple[int, int, bool]]:
+    """
+    Next left-to-right match of old_fwd or old_bwd that is a whole path token.
+    Returns (start, length, matched_forward_variant) or None.
+    """
+    while True:
+        idx_fwd = text.find(old_fwd, pos) if old_fwd else -1
+        idx_bwd = text.find(old_bwd, pos) if old_bwd and old_bwd != old_fwd else -1
+        candidates = []
+        if idx_fwd != -1:
+            candidates.append((idx_fwd, True, old_fwd))
+        if idx_bwd != -1:
+            candidates.append((idx_bwd, False, old_bwd))
+        if not candidates:
+            return None
+        idx, is_fwd, matched = min(candidates, key=lambda c: c[0])
+        if _is_bounded_path(text, idx, len(matched)):
+            return idx, len(matched), is_fwd
+        pos = idx + 1
+
+
+def _replace_bounded_paths(
+    text: str, old_fwd: str, new_fwd: str, old_bwd: str, new_bwd: str
+) -> str:
+    """Replace every bounded occurrence of either slash variant, left to right."""
+    parts: list[str] = []
+    pos = 0
+    while True:
+        found = _next_bounded_path(text, old_fwd, old_bwd, pos)
+        if found is None:
+            parts.append(text[pos:])
+            break
+        idx, length, is_fwd = found
+        parts.append(text[pos:idx])
+        parts.append(new_fwd if is_fwd else new_bwd)
+        pos = idx + length
+    return "".join(parts)
+
+
 def compute_xml_path_update(xml_file: Path, old_rel: str, new_rel: str) -> Optional[tuple[str, str]]:
     """
     Compute the result of replacing old_rel with new_rel inside xml_file
     (text-based replacement, both forward- and back-slash variants), WITHOUT
     writing anything to disk.
+
+    Only whole path tokens are replaced: the match must be preceded by '"' or
+    '>' and followed by '"' or '<'. A shorter path therefore does not rewrite
+    the prefix of a longer filename.
 
     Returns (new_text, encoding) if the replacement would change the file,
     or None if old_rel was not found (no change) or the file could not be
@@ -83,19 +152,10 @@ def compute_xml_path_update(xml_file: Path, old_rel: str, new_rel: str) -> Optio
     """
     try:
         text, enc = _read_xml(xml_file)
-        orig = text
-
-        # Build both slash variants for old and new paths.
-        old_fwd = old_rel.replace("\\", "/")
-        new_fwd = new_rel.replace("\\", "/")
-        old_bwd = old_rel.replace("/", "\\")
-        new_bwd = new_rel.replace("/", "\\")
-
-        text = text.replace(old_fwd, new_fwd)
-        text = text.replace(old_bwd, new_bwd)
-
-        if text != orig:
-            return text, enc
+        old_fwd, new_fwd, old_bwd, new_bwd = _path_variants(old_rel, new_rel)
+        new_text = _replace_bounded_paths(text, old_fwd, new_fwd, old_bwd, new_bwd)
+        if new_text != text:
+            return new_text, enc
         return None
     except Exception as e:
         log.error(f"compute_xml_path_update failed for {xml_file}: {e}")
@@ -126,7 +186,7 @@ def _find_nth_path_occurrence(
     text: str, old_fwd: str, old_bwd: str, n: int
 ) -> Optional[tuple[int, int, bool]]:
     """
-    Find the n-th (0-based) occurrence of old_fwd or old_bwd in text,
+    Find the n-th (0-based) bounded occurrence of old_fwd or old_bwd in text,
     scanning strictly left to right across both slash variants combined.
     Returns (start_index, match_length, matched_forward_variant) or None
     if there is no n-th occurrence.
@@ -134,26 +194,28 @@ def _find_nth_path_occurrence(
     pos = 0
     count = 0
     while True:
-        idx_fwd = text.find(old_fwd, pos) if old_fwd else -1
-        idx_bwd = text.find(old_bwd, pos) if old_bwd and old_bwd != old_fwd else -1
-        candidates = [(i, is_fwd, s) for i, is_fwd, s in
-                      ((idx_fwd, True, old_fwd), (idx_bwd, False, old_bwd)) if i != -1]
-        if not candidates:
+        found = _next_bounded_path(text, old_fwd, old_bwd, pos)
+        if found is None:
             return None
-        idx, is_fwd, matched = min(candidates, key=lambda c: c[0])
+        idx, length, is_fwd = found
         if count == n:
-            return idx, len(matched), is_fwd
+            return idx, length, is_fwd
         count += 1
-        pos = idx + len(matched)
+        pos = idx + length
 
 
 def compute_xml_path_update_at(
-    xml_file: Path, old_rel: str, new_rel: str, occurrence_index: int
+    xml_file: Path,
+    old_rel: str,
+    new_rel: str,
+    occurrence_index: int,
+    source_text: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """
     Like compute_xml_path_update, but replaces only the occurrence_index-th
     (0-based, left-to-right, forward+backward slash variants combined)
-    occurrence of old_rel in the file - not every occurrence.
+    bounded occurrence of old_rel — not every occurrence, and not a prefix
+    of a longer filename.
 
     Needed wherever old_rel is not guaranteed to be unique to the specific
     element being edited - e.g. two kit pads referencing the exact same
@@ -163,16 +225,25 @@ def compute_xml_path_update_at(
     from the same document-order traversal it used to identify the target
     element (e.g. counting how many earlier pads share the same path).
 
+    source_text, when given, is edited instead of the bytes on disk. Staging
+    keeps one pending XML body per file, so a second pad edit has to continue
+    from that body. The encoding is still taken from the file on disk when
+    it can be read.
+
     Returns (new_text, encoding) if the occurrence was found and replacing
     it would change the file, or None otherwise.
     """
     try:
-        text, enc = _read_xml(xml_file)
+        if source_text is None:
+            text, enc = _read_xml(xml_file)
+        else:
+            text = source_text
+            try:
+                _, enc = _read_xml(xml_file)
+            except Exception:
+                enc = "utf-8"
 
-        old_fwd = old_rel.replace("\\", "/")
-        new_fwd = new_rel.replace("\\", "/")
-        old_bwd = old_rel.replace("/", "\\")
-        new_bwd = new_rel.replace("/", "\\")
+        old_fwd, new_fwd, old_bwd, new_bwd = _path_variants(old_rel, new_rel)
 
         found = _find_nth_path_occurrence(text, old_fwd, old_bwd, occurrence_index)
         if found is None:
