@@ -48,6 +48,35 @@ class RestoreWorker(QThread):
             self.error.emit(str(e))
 
 
+class CardDiffWorker(QThread):
+    """Compare the scanned card to a ZIP off the UI thread. Writes nothing."""
+    succeeded = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, sd_root: Path, zip_path: Path, prefixes):
+        super().__init__()
+        self._sd_root = sd_root
+        self._zip_path = zip_path
+        self._prefixes = list(prefixes)
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            from ..core.card_diff import diff_card_against_zip
+            result = diff_card_against_zip(
+                self._sd_root,
+                self._zip_path,
+                self._prefixes,
+                is_cancelled=lambda: self._cancelled,
+            )
+            self.succeeded.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class BackupSyncModule(QWidget):
     def __init__(self):
         super().__init__()
@@ -56,6 +85,7 @@ class BackupSyncModule(QWidget):
         self._entries: list[BackupEntry] = []
         self._worker = None          # BackupWorker
         self._restore_worker = None  # RestoreWorker
+        self._diff_worker = None
         self._build_ui()
 
     def _build_ui(self):
@@ -186,7 +216,16 @@ class BackupSyncModule(QWidget):
         self._delete_backup_btn.setEnabled(False)
         self._delete_backup_btn.clicked.connect(self._delete_selected_backup)
 
+        self._compare_btn = QPushButton("Mit Karte vergleichen")
+        self._compare_btn.setObjectName("SecondaryButton")
+        self._compare_btn.setMinimumHeight(32)
+        self._compare_btn.setToolTip(
+            "Gewähltes ZIP mit der gescannten Karte vergleichen. Schreibt nichts zurück."
+        )
+        self._compare_btn.clicked.connect(self._compare_with_card)
+
         hist_btn_row.addWidget(self._restore_btn)
+        hist_btn_row.addWidget(self._compare_btn)
         hist_btn_row.addWidget(self._delete_backup_btn)
         hist_btn_row.addStretch()
         history_layout.addLayout(hist_btn_row)
@@ -275,6 +314,7 @@ class BackupSyncModule(QWidget):
             return
 
         self._create_btn.setEnabled(False)
+        self._progress.setRange(0, 100)
         self._progress.setVisible(True)
 
         self._worker = BackupWorker(
@@ -408,6 +448,7 @@ class BackupSyncModule(QWidget):
             return
 
         self._restore_btn.setEnabled(False)
+        self._progress.setRange(0, 100)
         self._progress.setVisible(True)
 
         self._restore_worker = RestoreWorker(entry.path, dest_path)
@@ -417,6 +458,89 @@ class BackupSyncModule(QWidget):
         self._restore_worker.finished.connect(self._on_restore_done)
         self._restore_worker.error.connect(self._on_restore_error)
         self._restore_worker.start()
+
+    def _selected_backup(self):
+        rows = self._history_table.selectedItems()
+        if not rows:
+            return None
+        item = self._history_table.item(rows[0].row(), 0)
+        return item.data(Qt.UserRole) if item else None
+
+    def _compare_with_card(self):
+        entry = self._selected_backup()
+        if entry is None:
+            self._status.setText("Backup wählen")
+            return
+        if not self._sd_root or not self._sd_root.exists():
+            self._status.setText("Karte scannen")
+            return
+        if self._diff_worker and self._diff_worker.isRunning():
+            self._status.setText("Vergleich läuft noch…")
+            return
+
+        prefixes = ["SONGS/", "KITS/", "SYNTHS/"]
+        if entry.exclude_samples:
+            QMessageBox.information(
+                self,
+                "Hinweis",
+                "Dieses Backup enthält keinen Samples-Ordner.\n"
+                "Verglichen werden nur SONGS, KITS und SYNTHS.",
+            )
+        else:
+            prefixes.append("SAMPLES/")
+
+        self._progress.setVisible(True)
+        self._progress.setRange(0, 0)
+        self._status.setText("Vergleiche Karte mit Backup…")
+        self._diff_worker = CardDiffWorker(self._sd_root, entry.path, prefixes)
+        self._diff_worker.succeeded.connect(self._on_diff_done)
+        self._diff_worker.failed.connect(self._on_diff_error)
+        self._diff_worker.start()
+
+    def _on_diff_done(self, result):
+        self._progress.setVisible(False)
+        self._progress.setRange(0, 100)
+        if getattr(result, "cancelled", False):
+            self._status.setText("Vergleich abgebrochen.")
+            return
+        counts = {"neu": 0, "fehlt": 0, "geändert": 0}
+        for row in result.rows:
+            counts[row.kind] = counts.get(row.kind, 0) + 1
+        self._status.setText(
+            f"{result.unchanged} unverändert · {counts['neu']} neu · "
+            f"{counts['fehlt']} fehlt · {counts['geändert']} geändert"
+        )
+        self._show_diff_dialog(result)
+
+    def _on_diff_error(self, message: str):
+        self._progress.setVisible(False)
+        self._progress.setRange(0, 100)
+        QMessageBox.warning(self, "Vergleich", message)
+
+    def _show_diff_dialog(self, result):
+        from PySide6.QtWidgets import QDialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Karte gegen Backup")
+        dlg.resize(680, 440)
+        layout = QVBoxLayout(dlg)
+        table = QTableWidget(0, 3)
+        table.setHorizontalHeaderLabels(["Klasse", "Typ", "Pfad"])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.verticalHeader().setVisible(False)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        for row in result.rows:
+            index = table.rowCount()
+            table.insertRow(index)
+            table.setItem(index, 0, QTableWidgetItem(row.kind))
+            table.setItem(index, 1, QTableWidgetItem(row.file_type))
+            table.setItem(index, 2, QTableWidgetItem(row.rel_path))
+        layout.addWidget(table, 1)
+        close = QPushButton("Schließen")
+        close.clicked.connect(dlg.accept)
+        layout.addWidget(close)
+        dlg.exec()
 
     def _delete_selected_backup(self):
         rows = self._history_table.selectedItems()

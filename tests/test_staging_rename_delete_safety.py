@@ -139,3 +139,38 @@ def test_delete_moves_file_to_trash_instead_of_destroying_it(tmp_path, monkeypat
     trashed = list(trash_root.glob("KIT000*"))
     assert len(trashed) == 1
     assert trashed[0].read_text(encoding="utf-8") == "IMPORTANT DATA"
+
+
+def test_delete_is_applied_after_xml_edit_even_if_staged_first(tmp_path, monkeypatch):
+    xml = tmp_path / "SONG.XML"
+    xml.write_text("<song/>", encoding="utf-8")
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"wav")
+    order = []
+
+    def _write(path, content, encoding="utf-8"):
+        order.append("xml")
+        path.write_text(content, encoding=encoding)
+
+    def _trash(path):
+        order.append("delete")
+        path.unlink()
+        return path
+
+    monkeypatch.setattr(file_ops, "_write_xml", _write)
+    monkeypatch.setattr(history, "move_to_trash", _trash)
+
+    store = StagingStore()
+    store.add(PendingChange(ChangeType.DELETE, wav, "sample_manager"))
+    store.add(PendingChange(
+        ChangeType.XML_EDIT, xml, "sample_manager",
+        new_content="<song>ok</song>", encoding="utf-8",
+    ))
+
+    success, failed = store.apply_all()
+
+    assert success == 2
+    assert failed == 0
+    assert order == ["xml", "delete"]
+    assert xml.read_text(encoding="utf-8") == "<song>ok</song>"
+    assert not wav.exists()
