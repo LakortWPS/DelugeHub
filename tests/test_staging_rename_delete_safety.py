@@ -69,10 +69,10 @@ def test_batch_rename_collision_is_blocked_and_files_untouched(tmp_path):
     store.add(PendingChange(ChangeType.RENAME, src_a, "kit_manager", new_name="MyKit.XML"))
     store.add(PendingChange(ChangeType.RENAME, src_b, "kit_manager", new_name="MyKit.XML"))
 
-    success, failed = store.apply_all()
+    report = store.apply_all()
 
-    assert success == 0
-    assert failed == 2
+    assert report.success == 0
+    assert report.failed == 2
     # Neither source file was touched or lost.
     assert src_a.read_text(encoding="utf-8") == "AAA"
     assert src_b.read_text(encoding="utf-8") == "BBB"
@@ -86,10 +86,10 @@ def test_rename_onto_existing_file_is_blocked(tmp_path):
     store = StagingStore()
     store.add(PendingChange(ChangeType.RENAME, src, "kit_manager", new_name="KIT001.XML"))
 
-    success, failed = store.apply_all()
+    report = store.apply_all()
 
-    assert success == 0
-    assert failed == 1
+    assert report.success == 0
+    assert report.failed == 1
     assert src.exists()
     assert src.read_text(encoding="utf-8") == "SOURCE"
     # The pre-existing file must survive with its original content.
@@ -102,10 +102,10 @@ def test_rename_without_collision_still_succeeds(tmp_path):
     store = StagingStore()
     store.add(PendingChange(ChangeType.RENAME, src, "kit_manager", new_name="RenamedKit.XML"))
 
-    success, failed = store.apply_all()
+    report = store.apply_all()
 
-    assert success == 1
-    assert failed == 0
+    assert report.success == 1
+    assert report.failed == 0
     assert not src.exists()
     assert (tmp_path / "RenamedKit.XML").read_text(encoding="utf-8") == "SOURCE"
 
@@ -130,12 +130,82 @@ def test_delete_moves_file_to_trash_instead_of_destroying_it(tmp_path, monkeypat
     store = staging2.StagingStore()
     store.add(staging2.PendingChange(staging2.ChangeType.DELETE, target, "kit_manager"))
 
-    success, failed = store.apply_all()
+    report = store.apply_all()
 
-    assert success == 1
-    assert failed == 0
+    assert report.success == 1
+    assert report.failed == 0
     assert not target.exists()
 
     trashed = list(trash_root.glob("KIT000*"))
     assert len(trashed) == 1
     assert trashed[0].read_text(encoding="utf-8") == "IMPORTANT DATA"
+    assert report.trashed == [(target, trashed[0])]
+
+    history.restore_from_trash(report.trashed[0][1], report.trashed[0][0])
+    assert target.read_text(encoding="utf-8") == "IMPORTANT DATA"
+
+
+def test_rename_chain_moves_the_occupant_first(tmp_path):
+    src_a = _kit(tmp_path, "A.XML", "AAA")
+    src_b = _kit(tmp_path, "B.XML", "BBB")
+
+    store = StagingStore()
+    store.add(PendingChange(ChangeType.RENAME, src_a, "kit_manager", new_name="B.XML"))
+    store.add(PendingChange(ChangeType.RENAME, src_b, "kit_manager", new_name="C.XML"))
+
+    report = store.apply_all()
+
+    assert report.success == 2
+    assert report.failed == 0
+    assert (tmp_path / "B.XML").read_text(encoding="utf-8") == "AAA"
+    assert (tmp_path / "C.XML").read_text(encoding="utf-8") == "BBB"
+    assert not src_a.exists()
+
+
+def test_rename_swap_is_blocked(tmp_path):
+    src_a = _kit(tmp_path, "A.XML", "AAA")
+    src_b = _kit(tmp_path, "B.XML", "BBB")
+
+    store = StagingStore()
+    store.add(PendingChange(ChangeType.RENAME, src_a, "kit_manager", new_name="B.XML"))
+    store.add(PendingChange(ChangeType.RENAME, src_b, "kit_manager", new_name="A.XML"))
+
+    report = store.apply_all()
+
+    assert report.success == 0
+    assert report.failed == 2
+    assert src_a.read_text(encoding="utf-8") == "AAA"
+    assert src_b.read_text(encoding="utf-8") == "BBB"
+    assert report.failures
+
+
+def test_peek_then_second_edit_keeps_both_replacements(tmp_path):
+    f = tmp_path / "KIT000.XML"
+    original = (
+        '<sound name="A"><osc1 fileName="SAMPLES/A.wav"></osc1></sound>'
+        '<sound name="B"><osc1 fileName="SAMPLES/B.wav"></osc1></sound>'
+    )
+    f.write_text(original, encoding="utf-8")
+
+    first = file_ops.compute_xml_path_update_at(
+        f, "SAMPLES/A.wav", "SAMPLES/A2.wav", 0
+    )
+    assert first is not None
+    store = StagingStore()
+    store.add(PendingChange(
+        ChangeType.XML_EDIT, f, "kit_manager",
+        new_content=first[0], encoding=first[1],
+    ))
+    assert store.peek(f) == first[0]
+
+    second = file_ops.compute_xml_path_update_at(
+        f, "SAMPLES/B.wav", "SAMPLES/B2.wav", 0, source_text=store.peek(f),
+    )
+    assert second is not None
+    store.add(PendingChange(
+        ChangeType.XML_EDIT, f, "kit_manager",
+        new_content=second[0], encoding=second[1],
+    ))
+    body = store.peek(f)
+    assert 'fileName="SAMPLES/A2.wav"' in body
+    assert 'fileName="SAMPLES/B2.wav"' in body

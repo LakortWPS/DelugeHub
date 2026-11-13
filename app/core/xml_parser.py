@@ -156,6 +156,33 @@ def validate_xml_text(text: str, context: str = "<string>") -> Optional[str]:
     return None
 
 
+def validate_xml_text_strict(text: str, context: str = "<string>") -> Optional[str]:
+    """
+    Parse XML that is about to be written, without the lxml recovery pass.
+
+    Reading existing Deluge files stays on _parse_xml_robust_text, because
+    some firmware files are missing a close tag and still load on the
+    instrument. A global replace must not stage that kind of damage: if the
+    bytes we would write do not parse, the caller skips the file.
+
+    Multiple top-level elements (firmwareVersion plus the content element)
+    are wrapped the same way the robust parser wraps them, so a well-formed
+    Deluge file still passes. An empty document does not.
+
+    context is accepted so callers can log the file name alongside the error
+    they receive; the message itself is the parser's.
+    """
+    del context  # the caller logs the path; the message is the parse error
+    body = re.sub(r'<\?xml[^?]*\?>\s*', '', text, count=1)
+    try:
+        wrapper = ET.fromstring(f'<_deluge_root_>{body}</_deluge_root_>')
+    except ET.ParseError as e:
+        return str(e)
+    if len(list(wrapper)) == 0:
+        return "kein XML-Element"
+    return None
+
+
 SAMPLE_ATTRIBUTES = [
     "fileName",
     "filePath",

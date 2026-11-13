@@ -1,24 +1,12 @@
 """
-Tests for app.core.volume_utils.apply_sequential_replacements.
+Tests for volume_utils.replace_default_params_volumes.
 
-kit_manager._cap_pad_volumes and batch_hub._do_cap_pad_volumes called
-`sources_block.replace(old_tag, new_tag, 1)` once per over-threshold pad,
-threading the progressively-edited block through the loop. For two pads
-sharing the exact same volume hex, this empirically still lands each
-replacement on the correct, distinct pad (verified below) - because an
-already-replaced occurrence disappears from the search space, so the next
-`.replace(..., 1)` call naturally finds the next one.
+Pad volume edits used to search the whole <soundSources> block for the
+next copy of a volume literal. An earlier sound that was not in the edit
+list (missing sample, under the cap) shared that literal and got rewritten
+instead of the sound the caller meant.
 
-The real fragility is structural, not something reproduced here: the
-reset-to-0 search has no anchor, so it can only be trusted to stay
-correct as long as every `old_tag` occurrence in the block belongs to
-the pad caller intended (same order as `caps`/`findall("sound")`
-produced them). apply_sequential_replacements removes that assumption
-entirely by tracking a monotonically advancing search position, so each
-replacement only ever consumes the next not-yet-processed occurrence in
-document order - matching the already-safe pattern kit_manager's
-_normalize_volumes used, and consolidating three copies of nearly
-identical replace-loop code (kit_manager x2, batch_hub) into one place.
+updates[i] lines up with the i-th <sound>. None leaves that sound alone.
 """
 import sys
 import types
@@ -49,23 +37,22 @@ def _load_core_module(name):
 
 
 volume_utils = _load_core_module("volume_utils")
-apply_sequential_replacements = volume_utils.apply_sequential_replacements
+replace_default_params_volumes = volume_utils.replace_default_params_volumes
 
 
 def test_two_pads_with_identical_volume_both_get_updated():
-    # Pad1 and Pad3 share the exact same over-threshold hex value; Pad2 is
-    # a different, unrelated value that must stay untouched.
     block = (
         '<sound name="Pad1"><defaultParams volume="0x7FFFFFFF"/></sound>'
         '<sound name="Pad2"><defaultParams volume="0x11111111"/></sound>'
         '<sound name="Pad3"><defaultParams volume="0x7FFFFFFF"/></sound>'
     )
-    replacements = [
+    updates = [
         ('volume="0x7FFFFFFF"', 'volume="0x4CCCCCCC"'),
+        None,
         ('volume="0x7FFFFFFF"', 'volume="0x4CCCCCCC"'),
     ]
 
-    new_block, changed = apply_sequential_replacements(block, replacements)
+    new_block, changed = replace_default_params_volumes(block, updates)
 
     assert changed == 2
     assert new_block == (
@@ -75,37 +62,45 @@ def test_two_pads_with_identical_volume_both_get_updated():
     )
 
 
-def test_monotonic_search_never_revisits_an_earlier_position():
-    # A stale/foreign occurrence of the *new* target value sitting earlier
-    # in the block must not confuse the search: apply_sequential_replacements
-    # only ever looks forward from where the previous match ended, so it
-    # can't be fooled into re-editing something before that point.
+def test_skipped_earlier_sound_with_the_same_volume_stays():
+    # The first sound is omitted (missing sample / failed analysis) but
+    # carries the same hex the second sound is supposed to change.
     block = (
-        '<sound name="Decoy"><defaultParams volume="0x4CCCCCCC"/></sound>'
-        '<sound name="Pad1"><defaultParams volume="0x7FFFFFFF"/></sound>'
+        '<sound name="Missing"><defaultParams volume="0x7FFFFFFF"/></sound>'
+        '<sound name="Target"><defaultParams volume="0x7FFFFFFF"/></sound>'
     )
-    replacements = [('volume="0x7FFFFFFF"', 'volume="0x4CCCCCCC"')]
+    updates = [
+        None,
+        ('volume="0x7FFFFFFF"', 'volume="0x4CCCCCCC"'),
+    ]
 
-    new_block, changed = apply_sequential_replacements(block, replacements)
+    new_block, changed = replace_default_params_volumes(block, updates)
 
     assert changed == 1
-    assert new_block == (
-        '<sound name="Decoy"><defaultParams volume="0x4CCCCCCC"/></sound>'
-        '<sound name="Pad1"><defaultParams volume="0x4CCCCCCC"/></sound>'
+    assert '<sound name="Missing"><defaultParams volume="0x7FFFFFFF"/></sound>' in new_block
+    assert '<sound name="Target"><defaultParams volume="0x4CCCCCCC"/></sound>' in new_block
+
+
+def test_volume_outside_default_params_is_not_a_candidate():
+    block = (
+        '<sound name="Pad1">'
+        '<osc1 volume="0x7FFFFFFF"/>'
+        '<defaultParams volume="0x7FFFFFFF"/>'
+        '</sound>'
     )
+    updates = [('volume="0x7FFFFFFF"', 'volume="0x4CCCCCCC"')]
+
+    new_block, changed = replace_default_params_volumes(block, updates)
+
+    assert changed == 1
+    assert '<osc1 volume="0x7FFFFFFF"/>' in new_block
+    assert '<defaultParams volume="0x4CCCCCCC"/>' in new_block
 
 
 def test_no_match_returns_unchanged_text_and_zero_count():
-    block = '<sound volume="0x11111111"/>'
-    new_block, changed = apply_sequential_replacements(block, [('volume="0xDEADBEEF"', 'x')])
+    block = '<sound name="Pad1"><defaultParams volume="0x11111111"/></sound>'
+    new_block, changed = replace_default_params_volumes(
+        block, [('volume="0xDEADBEEF"', 'volume="0x00000000"')]
+    )
     assert new_block == block
     assert changed == 0
-
-
-def test_replacements_preserve_unrelated_text():
-    block = 'A volume="0xAAAAAAAA" B volume="0xBBBBBBBB" C'
-    new_block, changed = apply_sequential_replacements(
-        block, [('volume="0xAAAAAAAA"', 'volume="0x00000000"')]
-    )
-    assert changed == 1
-    assert new_block == 'A volume="0x00000000" B volume="0xBBBBBBBB" C'

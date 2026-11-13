@@ -21,7 +21,7 @@ from ..core.models import SDCardIndex, Kit
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import (
     vol_to_display, display_to_vol, vol_to_amp, amp_to_vol,
-    apply_sequential_replacements,
+    replace_default_params_volumes,
 )
 
 log = logging.getLogger(__name__)
@@ -54,10 +54,10 @@ class PadWidget(QFrame):
         layout.addWidget(num_lbl)
         layout.addWidget(self._name_lbl, 1)
 
-    def set_sample(self, name: str, has_file: bool = True):
+    def set_sample(self, name: str, has_file: bool = True, note: str = ""):
         short = name[:10] + "…" if len(name) > 10 else name
         self._name_lbl.setText(short)
-        self._name_lbl.setToolTip(name)
+        self._name_lbl.setToolTip(f"{name}\n{note}" if note else name)
         if has_file:
             self.setObjectName("CardAccent")
         else:
@@ -272,6 +272,35 @@ class KitManagerModule(QWidget):
 
     def set_history(self, history):
         self._history = history
+        if hasattr(self, "_pending_panel"):
+            self._pending_panel.set_history(history)
+
+    def _working_xml(self, path: Path) -> tuple[str, str]:
+        """Staged XML body when one is pending, otherwise the file on disk."""
+        from ..core.file_ops import _read_xml
+        if self._staging is not None:
+            peeked = self._staging.peek(path)
+            if peeked is not None:
+                try:
+                    _, enc = _read_xml(path)
+                except Exception:
+                    enc = "utf-8"
+                return peeked, enc
+        return _read_xml(path)
+
+    @staticmethod
+    def _shared_pad_note(refs, pad_index: int) -> str:
+        if pad_index >= len(refs) or refs[pad_index] is None:
+            return ""
+        key = refs[pad_index].path.replace("\\", "/")
+        others = [
+            i + 1
+            for i, ref in enumerate(refs)
+            if ref is not None and i != pad_index and ref.path.replace("\\", "/") == key
+        ]
+        if not others:
+            return ""
+        return "auch Pad " + ", ".join(str(n) for n in others)
 
     def set_staging(self, staging: StagingStore):
         self._staging = staging
@@ -353,7 +382,8 @@ class KitManagerModule(QWidget):
         for i, ref in enumerate(kit.pad_refs[:16]):
             if i < len(self._pads) and ref is not None:
                 name = Path(ref.path.replace("\\", "/")).stem
-                self._pads[i].set_sample(name, ref.exists)
+                note = self._shared_pad_note(kit.pad_refs, i)
+                self._pads[i].set_sample(name, ref.exists, note)
 
     def _on_pad_click(self, pad_index: int):
         self._selected_pad = pad_index
@@ -364,11 +394,14 @@ class KitManagerModule(QWidget):
         if pad_index < len(refs) and refs[pad_index] is not None:
             ref = refs[pad_index]
             status = "✅ Vorhanden" if ref.exists else "❌ Fehlt"
+            note = self._shared_pad_note(refs, pad_index)
+            shared = f"\nGeteilt: {note}" if note else ""
             self._pad_info.setText(
                 f"Pad {pad_index + 1}\n"
                 f"Sample: {ref.path.split('/')[-1]}\n"
                 f"Pfad: {ref.path}\n"
                 f"Status: {status}"
+                f"{shared}"
             )
         else:
             self._pad_info.setText(f"Pad {pad_index + 1}\n(Kein Sample zugewiesen)")
@@ -396,20 +429,35 @@ class KitManagerModule(QWidget):
         kit = self._current_kit
         refs = kit.pad_refs
         if self._selected_pad < len(refs) and refs[self._selected_pad] is not None:
-            old_rel = refs[self._selected_pad].path
             from ..core.file_ops import compute_xml_path_update_at, _write_xml
+            from ..core.xml_parser import _parse_xml_robust_text, map_kit_pads_to_samples
 
-            # Two pads can reference the exact same sample. A plain
-            # whole-file replace would repoint every pad using old_rel,
-            # not just this one - so find which occurrence (in document
-            # order) belongs to *this* pad by counting identical
-            # references on earlier pads.
+            # Edit the staged body when one exists, and count occurrences in
+            # that same text. The scanned pad_refs still describe the last
+            # disk scan, so a second reassign would otherwise aim at an
+            # index the staged file no longer has.
+            working, _ = self._working_xml(kit.file_path)
+            live_refs = refs
+            parsed = _parse_xml_robust_text(working, context=str(kit.file_path))
+            if parsed is not None:
+                live_refs = map_kit_pads_to_samples(parsed, self._index.root_path)
+            if (
+                self._selected_pad >= len(live_refs)
+                or live_refs[self._selected_pad] is None
+            ):
+                self._status.setText("ℹ  Pfad konnte nicht im XML gefunden werden.")
+                return
+
+            old_rel = live_refs[self._selected_pad].path
             old_rel_fwd = old_rel.replace("\\", "/")
             occurrence_index = sum(
-                1 for r in refs[:self._selected_pad]
+                1 for r in live_refs[:self._selected_pad]
                 if r is not None and r.path.replace("\\", "/") == old_rel_fwd
             )
-            result = compute_xml_path_update_at(kit.file_path, old_rel, new_rel, occurrence_index)
+            result = compute_xml_path_update_at(
+                kit.file_path, old_rel, new_rel, occurrence_index,
+                source_text=working,
+            )
             if result is None:
                 self._status.setText("ℹ  Pfad konnte nicht im XML gefunden werden.")
                 return
@@ -533,10 +581,11 @@ class KitManagerModule(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        from ..core.xml_parser import _parse_xml_robust
-        from ..core.file_ops import _read_xml, _write_xml
+        from ..core.xml_parser import _parse_xml_robust_text
+        from ..core.file_ops import _write_xml
 
-        root = _parse_xml_robust(kit.file_path)
+        text, enc = self._working_xml(kit.file_path)
+        root = _parse_xml_robust_text(text, context=str(kit.file_path))
         if root is None:
             QMessageBox.warning(self, "Fehler", "Kit-XML konnte nicht geparst werden.")
             return
@@ -546,8 +595,9 @@ class KitManagerModule(QWidget):
             QMessageBox.warning(self, "Fehler", "Keine <soundSources> in diesem Kit gefunden.")
             return
 
+        sounds = list(sound_sources.findall("sound"))
         pads = []
-        for sound in sound_sources.findall("sound"):
+        for sound_index, sound in enumerate(sounds):
             osc1 = sound.find("osc1")
             if osc1 is None:
                 continue
@@ -587,6 +637,7 @@ class KitManagerModule(QWidget):
                 "vol_format": vol_format,
                 "rms": None,
                 "new_vol": None,
+                "sound_index": sound_index,
             })
 
         if not pads:
@@ -644,26 +695,25 @@ class KitManagerModule(QWidget):
             pad["new_vol"] = amp_to_vol(new_amp)
 
         import re
-        text, enc = _read_xml(kit.file_path)
-
         sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
         if not sources_match:
             QMessageBox.warning(self, "Fehler", "<soundSources>-Block nicht im XML gefunden.")
             return
 
         sources_block = sources_match.group(1)
-        replacements = []
+        updates: list = [None] * len(sounds)
         for pad in valid_pads:
             if not (pad["new_vol"] and pad["new_vol"] != pad["current_vol"]):
                 continue
             if pad["vol_format"] == "attr":
-                replacements.append((f'volume="{pad["current_vol"]}"', f'volume="{pad["new_vol"]}"'))
+                pair = (f'volume="{pad["current_vol"]}"', f'volume="{pad["new_vol"]}"')
             else:
-                replacements.append((
+                pair = (
                     f'<volume>{pad["current_vol"]}</volume>',
                     f'<volume>{pad["new_vol"]}</volume>',
-                ))
-        sources_block, changed = apply_sequential_replacements(sources_block, replacements)
+                )
+            updates[pad["sound_index"]] = pair
+        sources_block, changed = replace_default_params_volumes(sources_block, updates)
 
         if changed == 0:
             self._status.setText("ℹ  Keine Änderungen nötig — alle Pads bereits auf gleicher Lautstärke.")
@@ -726,10 +776,11 @@ class KitManagerModule(QWidget):
         if not ok:
             return
 
-        from ..core.xml_parser import _parse_xml_robust
-        from ..core.file_ops import _read_xml, _write_xml
+        from ..core.xml_parser import _parse_xml_robust_text
+        from ..core.file_ops import _write_xml
 
-        root = _parse_xml_robust(kit.file_path)
+        text, enc = self._working_xml(kit.file_path)
+        root = _parse_xml_robust_text(text, context=str(kit.file_path))
         if root is None:
             QMessageBox.warning(self, "Fehler", "Kit-XML konnte nicht geparst werden.")
             return
@@ -759,7 +810,6 @@ class KitManagerModule(QWidget):
             return
 
         new_hex = display_to_vol(threshold)
-        text, enc = _read_xml(kit.file_path)
 
         sources_pos = text.find('<soundSources>')
         pre_block  = text[:sources_pos] if sources_pos >= 0 else text
@@ -811,10 +861,11 @@ class KitManagerModule(QWidget):
             return
 
         import re
-        from ..core.xml_parser import _parse_xml_robust
-        from ..core.file_ops import _read_xml, _write_xml
+        from ..core.xml_parser import _parse_xml_robust_text
+        from ..core.file_ops import _write_xml
 
-        root = _parse_xml_robust(kit.file_path)
+        text, enc = self._working_xml(kit.file_path)
+        root = _parse_xml_robust_text(text, context=str(kit.file_path))
         if root is None:
             QMessageBox.warning(self, "Fehler", "Kit-XML konnte nicht geparst werden.")
             return
@@ -824,10 +875,11 @@ class KitManagerModule(QWidget):
             self._status.setText("ℹ  Keine <soundSources> in diesem Kit gefunden.")
             return
 
-        caps = []
+        updates = []
         for sound in sound_sources.findall("sound"):
             dp = sound.find("defaultParams")
             if dp is None:
+                updates.append(None)
                 continue
             vol_str = dp.get("volume", "").strip()
             vol_format = "attr"
@@ -837,15 +889,19 @@ class KitManagerModule(QWidget):
                     vol_str = (vol_elem.text or "").strip()
                     vol_format = "elem"
             if vol_str and vol_to_display(vol_str) > threshold:
-                caps.append((vol_str, display_to_vol(threshold), vol_format))
+                new_hex = display_to_vol(threshold)
+                if vol_format == "attr":
+                    updates.append((f'volume="{vol_str}"', f'volume="{new_hex}"'))
+                else:
+                    updates.append((f'<volume>{vol_str}</volume>', f'<volume>{new_hex}</volume>'))
+            else:
+                updates.append(None)
 
-        if not caps:
+        if not any(updates):
             self._status.setText(
                 f"ℹ  Alle Pad-Volumes bereits ≤ {threshold}/50 — kein Cap nötig."
             )
             return
-
-        text, enc = _read_xml(kit.file_path)
 
         sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
         if not sources_match:
@@ -853,13 +909,7 @@ class KitManagerModule(QWidget):
             return
 
         sources_block = sources_match.group(1)
-        replacements = []
-        for current_hex, new_hex, fmt in caps:
-            if fmt == "attr":
-                replacements.append((f'volume="{current_hex}"', f'volume="{new_hex}"'))
-            else:
-                replacements.append((f'<volume>{current_hex}</volume>', f'<volume>{new_hex}</volume>'))
-        sources_block, changed = apply_sequential_replacements(sources_block, replacements)
+        sources_block, changed = replace_default_params_volumes(sources_block, updates)
 
         if changed == 0:
             self._status.setText("ℹ  Keine Änderungen vorgenommen.")

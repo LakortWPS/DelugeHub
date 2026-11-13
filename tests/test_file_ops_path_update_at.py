@@ -119,3 +119,46 @@ def test_missing_file_returns_none():
     missing = Path("/nonexistent/KIT000.XML")
     result = compute_xml_path_update_at(missing, "a", "b", occurrence_index=0)
     assert result is None
+
+
+def test_shorter_path_does_not_rewrite_a_longer_filename_prefix(tmp_path):
+    f = tmp_path / "KIT000.XML"
+    original = (
+        '<sound name="A"><osc1 fileName="SAMPLES/KICK/kick.wav2"></osc1></sound>'
+        '<sound name="B"><osc1 fileName="SAMPLES/KICK/kick.wav"></osc1></sound>'
+    )
+    f.write_text(original, encoding="utf-8")
+
+    # Pad B is the only bounded occurrence of kick.wav, so its index is 0.
+    # The prefix inside kick.wav2 must stay a kick.wav2 file.
+    result = compute_xml_path_update_at(
+        f, "SAMPLES/KICK/kick.wav", "SAMPLES/SNARE/snare.wav", occurrence_index=0
+    )
+
+    assert result is not None
+    new_text, _enc = result
+    assert 'fileName="SAMPLES/KICK/kick.wav2"' in new_text
+    assert 'fileName="SAMPLES/SNARE/snare.wav"' in new_text
+    assert 'fileName="SAMPLES/SNARE/snare.wav2"' not in new_text
+
+
+def test_source_text_keeps_an_earlier_replacement(tmp_path):
+    f = tmp_path / "KIT000.XML"
+    original = (
+        '<sound name="A"><osc1 fileName="SAMPLES/A.wav"></osc1></sound>'
+        '<sound name="B"><osc1 fileName="SAMPLES/B.wav"></osc1></sound>'
+    )
+    f.write_text(original, encoding="utf-8")
+
+    first = compute_xml_path_update_at(
+        f, "SAMPLES/A.wav", "SAMPLES/A2.wav", occurrence_index=0
+    )
+    assert first is not None
+    second = compute_xml_path_update_at(
+        f, "SAMPLES/B.wav", "SAMPLES/B2.wav", occurrence_index=0,
+        source_text=first[0],
+    )
+    assert second is not None
+    new_text, _enc = second
+    assert 'fileName="SAMPLES/A2.wav"' in new_text
+    assert 'fileName="SAMPLES/B2.wav"' in new_text

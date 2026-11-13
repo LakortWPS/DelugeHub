@@ -58,6 +58,15 @@ class PendingChange:
         return cls(**d)
 
 
+@dataclass
+class ApplyReport:
+    """Outcome of StagingStore.apply_*. failures stay pending."""
+    success: int = 0
+    failed: int = 0
+    trashed: list[tuple[Path, Path]] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+
+
 def plan_global_replace(
     xml_files: list[Path], find_text: str, replace_text: str,
     source_module: str = "batch_hub",
@@ -75,12 +84,11 @@ def plan_global_replace(
 
     Files that fail to read, or in which neither replacement produces a
     change, are skipped (not included in the result). A file whose result
-    would no longer be parseable XML is also skipped — rather than staging
-    (and, on Save, writing) a change that could leave the Deluge unable to
-    load that file — and logged as a warning so the skip is visible.
+    does not pass the strict parser (no lxml recovery) is also skipped —
+    rather than staging a body the Deluge could not load — and logged.
     """
     from .file_ops import _read_xml
-    from .xml_parser import validate_xml_text
+    from .xml_parser import validate_xml_text_strict
 
     find_fwd = find_text.replace("\\", "/")
     replace_fwd = replace_text.replace("\\", "/")
@@ -99,7 +107,7 @@ def plan_global_replace(
         if new_text == text:
             continue
 
-        error = validate_xml_text(new_text, context=str(xml_file))
+        error = validate_xml_text_strict(new_text, context=str(xml_file))
         if error is not None:
             log.warning(
                 "plan_global_replace: %s uebersprungen - Ergebnis waere kein "
@@ -116,6 +124,37 @@ def plan_global_replace(
         ))
 
     return changes
+
+
+def global_replace_rejections(
+    xml_files: list[Path], find_text: str, replace_text: str,
+) -> list[tuple[Path, str]]:
+    """
+    Files whose global replace would change the text but fail the strict
+    parser. Same slash rules as plan_global_replace. Used to list the skip
+    reason before the user confirms.
+    """
+    from .file_ops import _read_xml
+    from .xml_parser import validate_xml_text_strict
+
+    find_fwd = find_text.replace("\\", "/")
+    replace_fwd = replace_text.replace("\\", "/")
+    find_bwd = find_text.replace("/", "\\")
+    replace_bwd = replace_text.replace("/", "\\")
+
+    rejected: list[tuple[Path, str]] = []
+    for xml_file in xml_files:
+        try:
+            text, _enc = _read_xml(xml_file)
+        except Exception:
+            continue
+        new_text = text.replace(find_fwd, replace_fwd).replace(find_bwd, replace_bwd)
+        if new_text == text:
+            continue
+        error = validate_xml_text_strict(new_text, context=str(xml_file))
+        if error is not None:
+            rejected.append((xml_file, error))
+    return rejected
 
 
 def preview_global_replace(xml_files: list[Path], find_text: str) -> list[tuple[Path, int]]:
@@ -193,24 +232,39 @@ class StagingStore:
     def count(self) -> int:
         return len(self._changes)
 
-    def apply_all(self, dest_root: Optional[Path] = None) -> tuple[int, int]:
+    def peek(self, file_path: Path) -> Optional[str]:
+        """Staged XML body for file_path, if an XML_EDIT is pending."""
+        change = self._changes.get(file_path)
+        if change is None or change.change_type != ChangeType.XML_EDIT:
+            return None
+        return change.new_content
+
+    def apply_all(self, dest_root: Optional[Path] = None) -> ApplyReport:
         return self._apply(list(self._changes.values()), dest_root)
 
-    def apply_for_module(self, source_module: str, dest_root: Optional[Path] = None) -> tuple[int, int]:
+    def apply_for_module(self, source_module: str, dest_root: Optional[Path] = None) -> ApplyReport:
         changes = self.get_for_module(source_module)
         return self._apply(changes, dest_root)
 
-    def _apply(self, changes: list[PendingChange], dest_root: Optional[Path]) -> tuple[int, int]:
+    def _apply(self, changes: list[PendingChange], dest_root: Optional[Path]) -> ApplyReport:
         from .file_ops import _write_xml
         from .history import move_to_trash
-        success = failed = 0
+        report = ApplyReport()
         applied_paths = []
-        blocked = self._blocked_rename_sources(changes, dest_root)
+        blocked, targets = self._blocked_rename_sources(changes, dest_root)
+        ordered = self._ordered_renames(changes, targets, blocked)
 
-        for c in changes:
-            if c.file_path in blocked:
-                failed += 1
-                continue
+        for path, reason in blocked.items():
+            report.failed += 1
+            report.failures.append(reason)
+            log.error("Staging: %s", reason)
+
+        runnable = [
+            c for c in changes
+            if c.change_type != ChangeType.RENAME and c.file_path not in blocked
+        ] + ordered
+
+        for c in runnable:
             try:
                 target = self._resolve_target(c.file_path, dest_root)
 
@@ -229,63 +283,140 @@ class StagingStore:
 
                 elif c.change_type == ChangeType.DELETE:
                     if not dest_root and c.file_path.exists():
-                        move_to_trash(c.file_path)
+                        trash_path = move_to_trash(c.file_path)
+                        report.trashed.append((c.file_path, trash_path))
 
                 applied_paths.append(c.file_path)
-                success += 1
+                report.success += 1
             except Exception as e:
                 log.error("Staging apply fehlgeschlagen (%s): %s", c.file_path.name, e)
-                failed += 1
+                report.failed += 1
+                report.failures.append(f"{c.file_path.name}: {e}")
 
         for p in applied_paths:
             self._changes.pop(p, None)
         self._autosave()
-        return success, failed
+        return report
 
     def _blocked_rename_sources(
         self, changes: list[PendingChange], dest_root: Optional[Path]
-    ) -> set[Path]:
+    ) -> tuple[dict[Path, str], dict[Path, Path]]:
         """
-        Refuse RENAME changes whose target filename would silently overwrite
-        an existing file - either another file already on disk, or another
-        change in this same batch that resolves to the same target name
-        (e.g. a batch-rename pattern without {index} collapsing several
-        files onto one name). Path.rename()/shutil.copy2() would otherwise
-        overwrite the target with no warning and no way to get it back.
+        Refuse RENAME changes that would overwrite a file which is not itself
+        moving out of the way in this batch.
 
-        Returns the set of source file_paths whose rename must be skipped.
+        A chain A→B, B→C is allowed: B leaves before A arrives. A swap
+        A→B, B→A is refused, as are two sources that share one target name
+        and a target that already exists and is not part of the batch.
+
+        Returns (blocked source → reason, source → target path).
         """
         rename_changes = [c for c in changes if c.change_type == ChangeType.RENAME]
-        if not rename_changes:
-            return set()
-
         targets_by_source: dict[Path, Path] = {}
+        if not rename_changes:
+            return {}, targets_by_source
+
         target_counts: dict[Path, int] = {}
         for c in rename_changes:
             target = self._resolve_target(c.file_path, dest_root).parent / c.new_name
             targets_by_source[c.file_path] = target
             target_counts[target] = target_counts.get(target, 0) + 1
 
-        blocked: set[Path] = set()
+        blocked: dict[Path, str] = {}
         for c in rename_changes:
             target = targets_by_source[c.file_path]
             if target == c.file_path:
-                continue  # no-op rename (new name == current name)
+                continue
             if target_counts[target] > 1:
-                blocked.add(c.file_path)
-                log.error(
-                    "Staging: Umbenennen von %s uebersprungen - Zielname %s wird "
-                    "von mehreren Aenderungen in diesem Batch belegt",
-                    c.file_path.name, target.name,
+                blocked[c.file_path] = (
+                    f"{c.file_path.name}: Zielname {target.name} ist im Batch mehrfach belegt"
                 )
-            elif target.exists():
-                blocked.add(c.file_path)
-                log.error(
-                    "Staging: Umbenennen von %s uebersprungen - Zieldatei %s "
-                    "existiert bereits",
-                    c.file_path.name, target.name,
+
+        for src in self._rename_cycles(targets_by_source, blocked):
+            target = targets_by_source[src]
+            blocked[src] = (
+                f"{src.name}: Umbenennung würde sich mit {target.name} im Batch tauschen"
+            )
+
+        while True:
+            progressed = False
+            for c in rename_changes:
+                if c.file_path in blocked:
+                    continue
+                target = targets_by_source[c.file_path]
+                if target == c.file_path or not target.exists():
+                    continue
+                occupant_moves = (
+                    target in targets_by_source
+                    and target not in blocked
+                    and targets_by_source[target] != target
                 )
-        return blocked
+                if occupant_moves:
+                    continue
+                blocked[c.file_path] = (
+                    f"{c.file_path.name}: Zieldatei {target.name} existiert bereits"
+                )
+                progressed = True
+            if not progressed:
+                break
+        return blocked, targets_by_source
+
+    @staticmethod
+    def _rename_cycles(
+        targets_by_source: dict[Path, Path], blocked: dict[Path, str]
+    ) -> set[Path]:
+        """Sources that lie on a cycle of in-batch renames (A→B→A)."""
+        cyclic: set[Path] = set()
+        for start in targets_by_source:
+            if start in blocked or start in cyclic:
+                continue
+            seen: list[Path] = []
+            cur = start
+            while cur in targets_by_source and cur not in blocked:
+                if cur in seen:
+                    cyclic.update(seen[seen.index(cur):])
+                    break
+                seen.append(cur)
+                nxt = targets_by_source[cur]
+                if nxt == cur:
+                    break
+                cur = nxt
+        return cyclic
+
+    @staticmethod
+    def _ordered_renames(
+        changes: list[PendingChange],
+        targets_by_source: dict[Path, Path],
+        blocked: dict[Path, str],
+    ) -> list[PendingChange]:
+        """
+        Rename the file that currently occupies a target name before the
+        change that wants that name. Cycles are already in `blocked`.
+        """
+        remaining = [
+            c for c in changes
+            if c.change_type == ChangeType.RENAME and c.file_path not in blocked
+        ]
+        ordered: list[PendingChange] = []
+        while remaining:
+            progressed = False
+            for c in list(remaining):
+                target = targets_by_source[c.file_path]
+                occupant_pending = any(
+                    other.file_path == target and other is not c for other in remaining
+                )
+                if not occupant_pending:
+                    ordered.append(c)
+                    remaining.remove(c)
+                    progressed = True
+            if not progressed:
+                for c in remaining:
+                    blocked[c.file_path] = (
+                        f"{c.file_path.name}: Umbenennung würde sich mit einer "
+                        "anderen Datei im Batch tauschen"
+                    )
+                break
+        return ordered
 
     def _resolve_target(self, original: Path, dest_root: Optional[Path]) -> Path:
         if dest_root is None or self._sd_root is None:
