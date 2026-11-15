@@ -8,7 +8,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
-- **Spalten sortieren**: Ein Klick auf die Spaltenüberschrift sortiert aufsteigend (A–Z bzw. klein nach groß), der nächste absteigend, der dritte stellt die Reihenfolge vom letzten Füllen wieder her. Nur die Anzeige — Dateien, XML und die Batch-Umbenennung bleiben an der ursprünglichen Zeile
+- **Genutzt in**: Klick auf einen Eintrag springt zum Song, Kit oder Synth; vom Pad aus lässt sich das Sample im Sample Manager öffnen
+- **Pad anhören**: das Sample eines Kit-Pads über den vorhandenen Player abspielen
+- **Set packen**: ausgewählte Songs und nur die Kits, Synths und Samples, die sie brauchen, in einen anderen Ordner kopieren — die Quellkarte bleibt unverändert
+- **Gleicher Inhalt**: doppelte Samples nach Dateiinhalt finden, verschenkten Platz sehen und zusammenführen — die Karte ändert sich erst beim Speichern
+- **Kit aus Ordner**: einen WAV-Ordner auf das Pad-Grid ziehen und die Dateien der Reihe nach den 16 Pads zuweisen — die Kit-XML bleibt bis zum Speichern unverändert
+- **Firmware**: Songs markieren, deren früheste kompatible Firmware neuer ist als der Rest der Karte
+- **Karte gegen Backup**: ein gewähltes ZIP mit der gescannten Karte vergleichen (neu, fehlt, geändert), ohne etwas zurückzuschreiben
 
 ---
 
