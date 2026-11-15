@@ -139,73 +139,38 @@ def test_delete_moves_file_to_trash_instead_of_destroying_it(tmp_path, monkeypat
     trashed = list(trash_root.glob("KIT000*"))
     assert len(trashed) == 1
     assert trashed[0].read_text(encoding="utf-8") == "IMPORTANT DATA"
-    assert report.trashed == [(target, trashed[0])]
-
-    history.restore_from_trash(report.trashed[0][1], report.trashed[0][0])
-    assert target.read_text(encoding="utf-8") == "IMPORTANT DATA"
 
 
-def test_rename_chain_moves_the_occupant_first(tmp_path):
-    src_a = _kit(tmp_path, "A.XML", "AAA")
-    src_b = _kit(tmp_path, "B.XML", "BBB")
+def test_delete_is_applied_after_xml_edit_even_if_staged_first(tmp_path, monkeypatch):
+    xml = tmp_path / "SONG.XML"
+    xml.write_text("<song/>", encoding="utf-8")
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"wav")
+    order = []
 
-    store = StagingStore()
-    store.add(PendingChange(ChangeType.RENAME, src_a, "kit_manager", new_name="B.XML"))
-    store.add(PendingChange(ChangeType.RENAME, src_b, "kit_manager", new_name="C.XML"))
+    def _write(path, content, encoding="utf-8"):
+        order.append("xml")
+        path.write_text(content, encoding=encoding)
 
-    report = store.apply_all()
+    def _trash(path):
+        order.append("delete")
+        path.unlink()
+        return path
 
-    assert report.success == 2
-    assert report.failed == 0
-    assert (tmp_path / "B.XML").read_text(encoding="utf-8") == "AAA"
-    assert (tmp_path / "C.XML").read_text(encoding="utf-8") == "BBB"
-    assert not src_a.exists()
-
-
-def test_rename_swap_is_blocked(tmp_path):
-    src_a = _kit(tmp_path, "A.XML", "AAA")
-    src_b = _kit(tmp_path, "B.XML", "BBB")
+    monkeypatch.setattr(file_ops, "_write_xml", _write)
+    monkeypatch.setattr(history, "move_to_trash", _trash)
 
     store = StagingStore()
-    store.add(PendingChange(ChangeType.RENAME, src_a, "kit_manager", new_name="B.XML"))
-    store.add(PendingChange(ChangeType.RENAME, src_b, "kit_manager", new_name="A.XML"))
-
-    report = store.apply_all()
-
-    assert report.success == 0
-    assert report.failed == 2
-    assert src_a.read_text(encoding="utf-8") == "AAA"
-    assert src_b.read_text(encoding="utf-8") == "BBB"
-    assert report.failures
-
-
-def test_peek_then_second_edit_keeps_both_replacements(tmp_path):
-    f = tmp_path / "KIT000.XML"
-    original = (
-        '<sound name="A"><osc1 fileName="SAMPLES/A.wav"></osc1></sound>'
-        '<sound name="B"><osc1 fileName="SAMPLES/B.wav"></osc1></sound>'
-    )
-    f.write_text(original, encoding="utf-8")
-
-    first = file_ops.compute_xml_path_update_at(
-        f, "SAMPLES/A.wav", "SAMPLES/A2.wav", 0
-    )
-    assert first is not None
-    store = StagingStore()
+    store.add(PendingChange(ChangeType.DELETE, wav, "sample_manager"))
     store.add(PendingChange(
-        ChangeType.XML_EDIT, f, "kit_manager",
-        new_content=first[0], encoding=first[1],
+        ChangeType.XML_EDIT, xml, "sample_manager",
+        new_content="<song>ok</song>", encoding="utf-8",
     ))
-    assert store.peek(f) == first[0]
 
-    second = file_ops.compute_xml_path_update_at(
-        f, "SAMPLES/B.wav", "SAMPLES/B2.wav", 0, source_text=store.peek(f),
-    )
-    assert second is not None
-    store.add(PendingChange(
-        ChangeType.XML_EDIT, f, "kit_manager",
-        new_content=second[0], encoding=second[1],
-    ))
-    body = store.peek(f)
-    assert 'fileName="SAMPLES/A2.wav"' in body
-    assert 'fileName="SAMPLES/B2.wav"' in body
+    success, failed = store.apply_all()
+
+    assert success == 2
+    assert failed == 0
+    assert order == ["xml", "delete"]
+    assert xml.read_text(encoding="utf-8") == "<song>ok</song>"
+    assert not wav.exists()

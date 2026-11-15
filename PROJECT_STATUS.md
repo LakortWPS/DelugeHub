@@ -106,28 +106,9 @@ Alle destruktiven Operationen (XML-Edit, Rename, Delete) werden jetzt gepuffert 
 
 ---
 
-## Review 2026-11 — erledigt
-
-Die sechs Datenfehler aus dem Review von v2.2.3 sind im Arbeitsstand behoben (61 Tests):
-
-| Thema | Stand |
-|---|---|
-| Pfad-Treffer nur an XML-Grenzen (`"` / `>` … `"` / `<`) | erledigt |
-| Zweiter XML-Edit liest `StagingStore.peek`, nicht die Disk | erledigt |
-| Volume nur im `<defaultParams>` des gemeinten Sounds | erledigt |
-| Globales Ersetzen: strenger Parser, Recovery bleibt fürs Lesen | erledigt |
-| Ordner-Suche hakt `fuzzy` / `exact_multi` ab | erledigt |
-| Delete-Undo über den Trash-Pfad; Umbenennungs-Ketten erlaubt | erledigt |
-
-### Ein Pending-Eintrag pro Datei
-
-`StagingStore` hält weiter genau eine `PendingChange` pro `file_path`. Das ist der Vertrag, kein offener Bug: wer eine XML-Datei ein zweites Mal ändert, muss `peek(path)` lesen und den neuen Body daraus bauen. Kit-Manager (Pad-Tausch, Normalize, Cap) und Batch-Hub tun das. Ein `add()` ohne `peek` ersetzt den vorherigen Body.
-
 ### Sichtbar im UI
 
-- Speichern nennt den Grund, wenn eine Umbenennung blockiert bleibt
-- Globales Ersetzen listet Dateien, die der strenge Parser ablehnt, vor der Bestätigung
-- Einstellungen → Papierkorb, Doppelklick auf eine vorgemerkte XML-Änderung (Diff), Pad-Hinweis „auch Pad N“
+- Tabellenköpfe sortieren in drei Stufen (aufsteigend, absteigend, ursprüngliche Reihenfolge). Nur Ansicht, Batch-Namen bleiben an der Füll-Reihenfolge
 
 ## Offene Punkte / Nächste Schritte
 

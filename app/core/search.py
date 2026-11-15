@@ -7,6 +7,7 @@ file path and to figure out which module a result should navigate to.
 """
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from .models import SDCardIndex
 
@@ -83,3 +84,32 @@ def search_index(index: SDCardIndex, query: str, limit: int = 20) -> list[Search
             results.append(SearchResult("sample", sample.name, sample.file_path, KIND_TO_MODULE["sample"]))
 
     return results
+
+
+def module_key_for_path(index: Optional[SDCardIndex], path) -> Optional[str]:
+    """
+    Map an XML path to the module key MainWindow._navigate() expects.
+
+    The lookup goes through the scanned index (songs, then kits, then
+    synths), not through the parent folder name. A hit returns
+    song_manager, kit_manager or synth_editor. Anything else — including
+    a sample path — returns None so the caller can stay on the current
+    page.
+    """
+    if index is None or path is None:
+        return None
+    try:
+        target = Path(path)
+    except TypeError:
+        return None
+
+    for song in index.songs:
+        if song.file_path == target:
+            return KIND_TO_MODULE["song"]
+    for kit in index.kits:
+        if kit.file_path == target:
+            return KIND_TO_MODULE["kit"]
+    for synth in index.synths:
+        if synth.file_path == target:
+            return KIND_TO_MODULE["synth"]
+    return None

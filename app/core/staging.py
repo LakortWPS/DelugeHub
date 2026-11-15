@@ -251,20 +251,17 @@ class StagingStore:
         from .history import move_to_trash
         report = ApplyReport()
         applied_paths = []
-        blocked, targets = self._blocked_rename_sources(changes, dest_root)
-        ordered = self._ordered_renames(changes, targets, blocked)
+        blocked = self._blocked_rename_sources(changes, dest_root)
+        # DELETE last: an XML_EDIT in the same save must retarget paths
+        # before the sample file they named is moved to the trash.
+        # RENAME stays in its original relative order, ahead of DELETE.
+        ordered = [c for c in changes if c.change_type != ChangeType.DELETE]
+        ordered.extend(c for c in changes if c.change_type == ChangeType.DELETE)
 
-        for path, reason in blocked.items():
-            report.failed += 1
-            report.failures.append(reason)
-            log.error("Staging: %s", reason)
-
-        runnable = [
-            c for c in changes
-            if c.change_type != ChangeType.RENAME and c.file_path not in blocked
-        ] + ordered
-
-        for c in runnable:
+        for c in ordered:
+            if c.file_path in blocked:
+                failed += 1
+                continue
             try:
                 target = self._resolve_target(c.file_path, dest_root)
 

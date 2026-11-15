@@ -7,18 +7,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Fixed
-- **Pfad-Ersetzung an XML-Grenzen**: `compute_xml_path_update` und `compute_xml_path_update_at` ersetzen einen Sample-Pfad nur noch, wenn davor `"` oder `>` und dahinter `"` oder `<` steht. `kick.wav` schreibt nicht mehr das Präfix von `kick.wav2` um
-- **Zweiter XML-Edit derselben Datei**: `StagingStore.peek` liefert den vorgemerkten Text. Pad-Tausch und Volume-Schreiben in Kit-Manager und Batch-Hub setzen darauf auf, statt die Datei von der Karte neu zu lesen und die erste Änderung zu verwerfen
-- **Pad-Volume am richtigen Sound**: `replace_default_params_volumes` ändert nur das `<defaultParams>` des gemeinten Sounds. Ein früherer Pad mit demselben Hex, der nicht in der Änderung steht, bleibt unverändert
-- **Globales Ersetzen, strenger Parser**: `plan_global_replace` staged kein Ergebnis mehr, das nur der lxml-Recovery-Pass noch lesen könnte (fehlendes End-Tag). Lesen vorhandener Firmware-Dateien bleibt robust
-- **Lost Sample Finder, Ordner-Suche**: unsichere Treffer (`fuzzy`, `exact_multi`) werden nach der Ordner-Suche genauso abgehakt wie nach dem Auto-Match
-- **Kit-/Song-Löschen rückgängig**: der Trash-Pfad aus `move_to_trash` hängt an der Undo-History. Umbenennungs-Ketten (`A→B`, `B→C`) im selben Batch laufen durch; Kollision und Tausch bleiben blockiert, der Grund steht in der Speichern-Meldung
-
 ### Added
-- **Papierkorb** in den Einstellungen: Liste von `~/.delugyhub/trash` mit Wiederherstellen. Bricht ab, wenn die Zieldatei schon existiert
-- **Diff vor dem Speichern**: Doppelklick auf eine vorgemerkte XML-Änderung im Pending-Panel zeigt den Zeilenunterschied zur Datei auf der Karte
-- **Geteiltes Sample**: die Pad-Ansicht nennt andere Pads, die denselben Pfad nutzen
+- **Genutzt in**: Klick auf einen Eintrag springt zum Song, Kit oder Synth; vom Pad aus lässt sich das Sample im Sample Manager öffnen
+- **Pad anhören**: das Sample eines Kit-Pads über den vorhandenen Player abspielen
+- **Set packen**: ausgewählte Songs und nur die Kits, Synths und Samples, die sie brauchen, in einen anderen Ordner kopieren — die Quellkarte bleibt unverändert
+- **Gleicher Inhalt**: doppelte Samples nach Dateiinhalt finden, verschenkten Platz sehen und zusammenführen — die Karte ändert sich erst beim Speichern
+- **Kit aus Ordner**: einen WAV-Ordner auf das Pad-Grid ziehen und die Dateien der Reihe nach den 16 Pads zuweisen — die Kit-XML bleibt bis zum Speichern unverändert
+- **Firmware**: Songs markieren, deren früheste kompatible Firmware neuer ist als der Rest der Karte
+- **Karte gegen Backup**: ein gewähltes ZIP mit der gescannten Karte vergleichen (neu, fehlt, geändert), ohne etwas zurückzuschreiben
 
 ---
 
