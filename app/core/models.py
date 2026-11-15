@@ -29,6 +29,8 @@ class Song:
     track_count: int = 0
     sample_refs: list[SampleRef] = field(default_factory=list)
     raw_xml: Optional[str] = None
+    firmware_version: str = ""
+    earliest_compatible: str = ""
 
     @property
     def missing_samples(self) -> list[SampleRef]:
@@ -47,6 +49,8 @@ class Kit:
     sample_refs: list[SampleRef] = field(default_factory=list)
     pad_refs: list[Optional[SampleRef]] = field(default_factory=list)
     raw_xml: Optional[str] = None
+    firmware_version: str = ""
+    earliest_compatible: str = ""
 
     @property
     def missing_samples(self) -> list[SampleRef]:
@@ -66,6 +70,8 @@ class Synth:
     filter_type: str = "lpf"
     sample_refs: list[SampleRef] = field(default_factory=list)
     raw_xml: Optional[str] = None
+    firmware_version: str = ""
+    earliest_compatible: str = ""
 
     @property
     def missing_samples(self) -> list[SampleRef]:

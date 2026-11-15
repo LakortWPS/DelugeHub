@@ -206,8 +206,13 @@ class StagingStore:
         success = failed = 0
         applied_paths = []
         blocked = self._blocked_rename_sources(changes, dest_root)
+        # DELETE last: an XML_EDIT in the same save must retarget paths
+        # before the sample file they named is moved to the trash.
+        # RENAME stays in its original relative order, ahead of DELETE.
+        ordered = [c for c in changes if c.change_type != ChangeType.DELETE]
+        ordered.extend(c for c in changes if c.change_type == ChangeType.DELETE)
 
-        for c in changes:
+        for c in ordered:
             if c.file_path in blocked:
                 failed += 1
                 continue

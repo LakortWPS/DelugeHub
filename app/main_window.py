@@ -404,6 +404,7 @@ class MainWindow(QMainWindow):
         # Kit Manager
         kits = reg("kit_manager", KitManagerModule())
         kits.request_rescan.connect(self._trigger_scan)
+        kits.open_path.connect(self._open_indexed_path)
 
         # Synth Editor
         synths = reg("synth_editor", SynthEditorModule())
@@ -412,6 +413,8 @@ class MainWindow(QMainWindow):
         # Sample Manager
         samples = reg("sample_manager", SampleManagerModule())
         samples.request_rescan.connect(self._trigger_scan)
+        samples.open_path.connect(self._open_indexed_path)
+        samples.pending_changed.connect(self._refresh_pending_panels)
 
         # Lost Sample Finder
         lsf = reg("lost_sample_finder", LostSampleFinderModule())
@@ -479,6 +482,18 @@ class MainWindow(QMainWindow):
         module = self._modules.get(result.module_key)
         if module and hasattr(module, "select_by_path"):
             module.select_by_path(result.file_path)
+
+    def _open_indexed_path(self, module_key: str, file_path):
+        self._navigate(module_key)
+        module = self._modules.get(module_key)
+        if module and hasattr(module, "select_by_path"):
+            module.select_by_path(file_path)
+
+    def _refresh_pending_panels(self):
+        for module in self._modules.values():
+            panel = getattr(module, "_pending_panel", None)
+            if panel is not None:
+                panel.refresh()
 
     # ── Navigation ─────────────────────────────────────────────────────────
     def _navigate(self, key: str):

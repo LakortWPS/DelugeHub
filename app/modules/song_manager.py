@@ -12,15 +12,17 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
     QAbstractItemView, QFileDialog, QInputDialog, QMessageBox,
-    QLineEdit, QSplitter, QTreeWidget, QTreeWidgetItem
+    QLineEdit, QSplitter, QTreeWidget, QTreeWidgetItem,
+    QDialog, QDialogButtonBox, QCheckBox, QScrollArea, QProgressDialog,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Song
 from ..core.file_ops import update_xml_path
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import vol_to_display, display_to_vol
+from ..core.xml_parser import build_pack_plan, pack_target_rejected, song_needs_newer_firmware
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +31,43 @@ COL_BPM  = 1
 COL_TRACKS = 2
 COL_MISSING = 3
 COL_SIZE = 4
+COL_FW = 5
+
+
+class _PackCopyWorker(QThread):
+    """Copy a pack into another folder. The source card is never written."""
+    progress = Signal(int, str)
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, files, dest: Path):
+        super().__init__()
+        self._files = list(files)
+        self._dest = dest
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        copied = 0
+        try:
+            total = max(len(self._files), 1)
+            for index, item in enumerate(self._files):
+                if self._cancel:
+                    self.succeeded.emit(
+                        f"Abgebrochen — {copied} Dateien liegen schon im Ziel. Quelle unverändert."
+                    )
+                    return
+                target = self._dest / item.rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(item.abs_path), str(target))
+                copied += 1
+                self.progress.emit(int((index + 1) / total * 100), item.rel_path)
+            self.succeeded.emit(f"Set gepackt: {copied} Dateien. Quelle unverändert.")
+        except Exception as e:
+            log.error("Set packen fehlgeschlagen: %s", e)
+            self.failed.emit(str(e))
 
 
 class SongManagerModule(QWidget):
@@ -41,6 +80,8 @@ class SongManagerModule(QWidget):
         self._songs: list[Song] = []
         self._history = None
         self._staging: Optional[StagingStore] = None
+        self._pack_worker = None
+        self._pack_progress = None
         self._build_ui()
 
     def _build_ui(self):
@@ -75,6 +116,15 @@ class SongManagerModule(QWidget):
         self._export_btn.setToolTip("Song + alle Dependencies (Samples, Kits, Synths) als Paket exportieren")
         self._export_btn.clicked.connect(self._export_selected)
         self._export_btn.setEnabled(False)
+
+        self._pack_btn = QPushButton("Set packen")
+        self._pack_btn.setObjectName("SecondaryButton")
+        self._pack_btn.setToolTip(
+            "Ausgewählte Songs plus nur die Kits, Synths und Samples, die sie brauchen, "
+            "in einen anderen Ordner kopieren. Die Quellkarte bleibt unverändert."
+        )
+        self._pack_btn.clicked.connect(self._pack_set)
+        self._pack_btn.setEnabled(False)
 
         self._rename_btn = QPushButton("✏ Umbenennen")
         self._rename_btn.setObjectName("SecondaryButton")
@@ -114,6 +164,7 @@ class SongManagerModule(QWidget):
         tb_layout.addWidget(QLabel("🔎"))
         tb_layout.addWidget(self._search, 1)
         tb_layout.addWidget(self._export_btn)
+        tb_layout.addWidget(self._pack_btn)
         tb_layout.addWidget(self._rename_btn)
         tb_layout.addWidget(self._dupe_btn)
         tb_layout.addWidget(self._cap_master_btn)
@@ -125,8 +176,10 @@ class SongManagerModule(QWidget):
         # Splitter: table | detail
         splitter = QSplitter(Qt.Horizontal)
 
-        self._table = QTableWidget(0, 5)
-        self._table.setHorizontalHeaderLabels(["Song Name", "BPM", "Tracks", "Fehlend", "Größe"])
+        self._table = QTableWidget(0, 6)
+        self._table.setHorizontalHeaderLabels(
+            ["Song Name", "BPM", "Tracks", "Fehlend", "Größe", "Firmware"]
+        )
         self._table.setAlternatingRowColors(True)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -137,10 +190,12 @@ class SongManagerModule(QWidget):
         hv.setSectionResizeMode(COL_TRACKS, QHeaderView.Interactive)
         hv.setSectionResizeMode(COL_MISSING, QHeaderView.Interactive)
         hv.setSectionResizeMode(COL_SIZE, QHeaderView.Interactive)
+        hv.setSectionResizeMode(COL_FW, QHeaderView.Interactive)
         self._table.setColumnWidth(COL_BPM, 65)
         self._table.setColumnWidth(COL_TRACKS, 65)
         self._table.setColumnWidth(COL_MISSING, 80)
         self._table.setColumnWidth(COL_SIZE, 75)
+        self._table.setColumnWidth(COL_FW, 80)
         self._table.itemSelectionChanged.connect(self._on_selection)
         splitter.addWidget(self._table)
 
@@ -213,6 +268,7 @@ class SongManagerModule(QWidget):
         self._index = index
         self._songs = index.songs
         self._populate_table(self._songs)
+        self._pack_btn.setEnabled(bool(self._songs))
         self._status.setText(f"{len(self._songs)} Songs  •  {sum(len(s.missing_samples) for s in self._songs)} fehlende Referenzen")
 
     def select_by_path(self, file_path) -> bool:
@@ -256,6 +312,7 @@ class SongManagerModule(QWidget):
                 log.debug("Dateigröße nicht lesbar für %s: %s", s.file_path.name, e)
                 size_str = "—"
             self._table.setItem(row, COL_SIZE, QTableWidgetItem(size_str))
+            self._table.setItem(row, COL_FW, self._firmware_item(s))
 
     def _filter(self):
         text = self._search.text().lower()
@@ -288,7 +345,9 @@ class SongManagerModule(QWidget):
         ts = f"{song.time_signature_numerator}/{song.time_signature_denominator}"
         info = f"BPM: {bpm_str}\nTakt: {ts}\nTracks: {song.track_count}\n"
         info += f"Samples: {len(song.sample_refs)}\n"
-        info += f"Fehlend: {len(song.missing_samples)}"
+        info += f"Fehlend: {len(song.missing_samples)}\n"
+        info += f"Firmware: {song.firmware_version or '—'}\n"
+        info += f"Früheste Firmware: {song.earliest_compatible or '—'}"
         self._detail_info.setText(info)
 
         self._ref_tree.clear()
@@ -311,6 +370,138 @@ class SongManagerModule(QWidget):
         if miss_item.childCount():
             self._ref_tree.addTopLevelItem(miss_item)
             miss_item.setExpanded(True)
+
+    def _firmware_item(self, song: Song) -> QTableWidgetItem:
+        item = QTableWidgetItem("")
+        if not self._index or not song.earliest_compatible:
+            return item
+        others = []
+        for other in self._index.songs:
+            if other.file_path != song.file_path and other.earliest_compatible:
+                others.append(other.earliest_compatible)
+        for kit in self._index.kits:
+            if kit.earliest_compatible:
+                others.append(kit.earliest_compatible)
+        for synth in self._index.synths:
+            if synth.earliest_compatible:
+                others.append(synth.earliest_compatible)
+        base = song_needs_newer_firmware(song.earliest_compatible, others)
+        if not base:
+            return item
+        item = QTableWidgetItem("neuer")
+        item.setToolTip(f"Song braucht {song.earliest_compatible}, Karte sonst bis {base}")
+        return item
+
+    def _pack_set(self):
+        if not self._index or not self._index.songs:
+            self._status.setText("Keine Songs im Index.")
+            return
+        if self._pack_worker and self._pack_worker.isRunning():
+            self._status.setText("Set wird noch kopiert…")
+            return
+        selected = self._ask_pack_songs()
+        if not selected:
+            return
+        plan = build_pack_plan(self._index, selected)
+        if not plan.files:
+            self._status.setText("Nichts zu packen.")
+            return
+        if not self._confirm_pack(plan):
+            return
+        dest = QFileDialog.getExistingDirectory(self, "Zielordner für das Set", "")
+        if not dest:
+            return
+        dest_path = Path(dest)
+        if pack_target_rejected(self._index.root_path, dest_path):
+            self._status.setText("Ziel abgelehnt: der Ordner liegt auf der Quellkarte oder enthält sie.")
+            return
+        self._start_pack_copy(plan, dest_path)
+
+    def _ask_pack_songs(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Set packen")
+        dlg.resize(420, 480)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("Songs für das Set:"))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        current = self._selected_song()
+        boxes = []
+        for song in self._index.songs:
+            box = QCheckBox(song.name)
+            box.setChecked(current is not None and song.file_path == current.file_path)
+            inner_layout.addWidget(box)
+            boxes.append((box, song))
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Weiter")
+        buttons.button(QDialogButtonBox.Cancel).setText("Abbrechen")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        chosen = [song for box, song in boxes if box.isChecked()]
+        if not chosen:
+            self._status.setText("Keine Songs ausgewählt.")
+            return None
+        return chosen
+
+    def _confirm_pack(self, plan) -> bool:
+        text = (
+            f"{plan.count_kind('song')} Songs, {plan.count_kind('kit')} Kits, "
+            f"{plan.count_kind('synth')} Synths, {plan.count_kind('sample')} Samples\n"
+            f"{plan.total_bytes / (1024 * 1024):.1f} MB"
+        )
+        details = []
+        if plan.missing:
+            details.append("Fehlende Samples:")
+            details.extend(plan.missing)
+        if plan.unresolved_presets:
+            details.append("Nicht aufgelöste Presets:")
+            details.extend(plan.unresolved_presets)
+        box = QMessageBox(self)
+        box.setWindowTitle("Set packen")
+        box.setText(text)
+        if details:
+            box.setDetailedText("\n".join(details))
+        box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        box.button(QMessageBox.Ok).setText("Kopieren")
+        box.button(QMessageBox.Cancel).setText("Abbrechen")
+        return box.exec() == QMessageBox.Ok
+
+    def _start_pack_copy(self, plan, dest: Path):
+        self._pack_btn.setEnabled(False)
+        progress = QProgressDialog("Set wird kopiert…", "Abbrechen", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        self._pack_progress = progress
+        worker = _PackCopyWorker(plan.files, dest)
+        self._pack_worker = worker
+        worker.progress.connect(lambda value, name: (
+            progress.setValue(value),
+            progress.setLabelText(name),
+        ))
+        progress.canceled.connect(worker.cancel)
+        worker.succeeded.connect(self._on_pack_done)
+        worker.failed.connect(self._on_pack_failed)
+        worker.start()
+
+    def _on_pack_done(self, message: str):
+        if self._pack_progress is not None:
+            self._pack_progress.close()
+        self._pack_btn.setEnabled(bool(self._songs))
+        self._status.setText(message)
+
+    def _on_pack_failed(self, message: str):
+        if self._pack_progress is not None:
+            self._pack_progress.close()
+        self._pack_btn.setEnabled(bool(self._songs))
+        self._status.setText(f"Packen fehlgeschlagen: {message}. Quelle unverändert.")
 
     def _rename_selected(self):
         song = self._selected_song()

@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Kit
+from ..core.sd_scanner import AUDIO_EXTENSIONS
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import (
     vol_to_display, display_to_vol, vol_to_amp, amp_to_vol,
@@ -25,6 +26,60 @@ from ..core.volume_utils import (
 )
 
 log = logging.getLogger(__name__)
+
+_PAD_AUDIO_EXTENSIONS = {".wav", ".aif", ".aiff"}
+
+
+def pad_preview_enabled(path_exists, suffix, available, supports_all_formats) -> bool:
+    """Same play rule as the sample manager: file on disk, player up, format ok."""
+    ext = (suffix or "").lower()
+    if not path_exists or not available:
+        return False
+    if supports_all_formats:
+        return ext in AUDIO_EXTENSIONS
+    return ext == ".wav"
+
+
+class PadGridFrame(QFrame):
+    """4×4 pad grid. Accepts a folder drop, ignores loose files."""
+    folder_dropped = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("Card")
+        self.setAcceptDrops(True)
+
+    def _directory_url(self, event):
+        mime = event.mimeData()
+        if mime is None or not mime.hasUrls():
+            return None
+        urls = mime.urls()
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return None
+        path = Path(urls[0].toLocalFile())
+        if path.is_dir():
+            return str(path)
+        return None
+
+    def dragEnterEvent(self, event):
+        if self._directory_url(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._directory_url(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        folder = self._directory_url(event)
+        if not folder:
+            event.ignore()
+            return
+        self.folder_dropped.emit(folder)
+        event.acceptProposedAction()
 
 
 class PadWidget(QFrame):
@@ -37,6 +92,7 @@ class PadWidget(QFrame):
         self.setObjectName("Card")
         self.setFixedSize(88, 72)
         self.setCursor(Qt.PointingHandCursor)
+        self.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -65,6 +121,29 @@ class PadWidget(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def _grid_frame(self):
+        parent = self.parent()
+        while parent is not None and not isinstance(parent, PadGridFrame):
+            parent = parent.parent()
+        return parent
+
+    def dragEnterEvent(self, event):
+        frame = self._grid_frame()
+        if frame is not None and frame._directory_url(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        frame = self._grid_frame()
+        if frame is None:
+            event.ignore()
+            return
+        frame.dropEvent(event)
+
     def mousePressEvent(self, event):
         self.clicked.emit(self._pad_number)
         super().mousePressEvent(event)
@@ -72,6 +151,7 @@ class PadWidget(QFrame):
 
 class KitManagerModule(QWidget):
     request_rescan = Signal()
+    open_path = Signal(str, object)
 
     def __init__(self):
         super().__init__()
@@ -81,6 +161,8 @@ class KitManagerModule(QWidget):
         self._pads: list[PadWidget] = []
         self._history = None
         self._staging: Optional[StagingStore] = None
+        from .sample_manager import AudioPlayer
+        self._player = AudioPlayer()
         self._build_ui()
 
     def _build_ui(self):
@@ -197,9 +279,9 @@ class KitManagerModule(QWidget):
         right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(12)
 
-        # Pad grid (4x4 = 16 pads)
-        grid_frame = QFrame()
-        grid_frame.setObjectName("Card")
+        # Pad grid (4x4 = 16 pads). Drops land here, not on the rest of the page.
+        grid_frame = PadGridFrame()
+        grid_frame.folder_dropped.connect(self._on_folder_dropped)
         grid_layout_outer = QVBoxLayout(grid_frame)
         grid_layout_outer.setContentsMargins(12, 12, 12, 12)
 
@@ -238,8 +320,29 @@ class KitManagerModule(QWidget):
         self._reassign_btn.setEnabled(False)
         self._reassign_btn.clicked.connect(self._reassign_pad)
 
+        self._show_sample_btn = QPushButton("Im Sample Manager zeigen")
+        self._show_sample_btn.setObjectName("SecondaryButton")
+        self._show_sample_btn.setEnabled(False)
+        self._show_sample_btn.clicked.connect(self._show_pad_sample)
+
+        self._listen_btn = QPushButton("▶ Anhören")
+        self._listen_btn.setEnabled(False)
+        self._listen_btn.clicked.connect(self._listen_pad)
+
+        self._listen_stop_btn = QPushButton("Stop")
+        self._listen_stop_btn.setObjectName("SecondaryButton")
+        self._listen_stop_btn.clicked.connect(self._player.stop)
+        if not self._player.available:
+            self._listen_btn.setToolTip("sounddevice nicht installiert — pip install sounddevice")
+
+        listen_row = QHBoxLayout()
+        listen_row.addWidget(self._listen_btn)
+        listen_row.addWidget(self._listen_stop_btn)
+
         pd_layout.addWidget(self._pad_info)
         pd_layout.addWidget(self._reassign_btn)
+        pd_layout.addWidget(self._show_sample_btn)
+        pd_layout.addLayout(listen_row)
 
         right_layout.addWidget(self._pad_detail)
         right_layout.addStretch()
@@ -355,14 +458,22 @@ class KitManagerModule(QWidget):
                 name = Path(ref.path.replace("\\", "/")).stem
                 self._pads[i].set_sample(name, ref.exists)
 
+    def _selected_pad_ref(self):
+        if self._selected_pad is None or not self._current_kit:
+            return None
+        refs = self._current_kit.pad_refs
+        if self._selected_pad < len(refs):
+            return refs[self._selected_pad]
+        return None
+
     def _on_pad_click(self, pad_index: int):
         self._selected_pad = pad_index
         if not self._current_kit:
             return
 
         refs = self._current_kit.pad_refs
-        if pad_index < len(refs) and refs[pad_index] is not None:
-            ref = refs[pad_index]
+        ref = refs[pad_index] if pad_index < len(refs) else None
+        if ref is not None:
             status = "✅ Vorhanden" if ref.exists else "❌ Fehlt"
             self._pad_info.setText(
                 f"Pad {pad_index + 1}\n"
@@ -370,9 +481,203 @@ class KitManagerModule(QWidget):
                 f"Pfad: {ref.path}\n"
                 f"Status: {status}"
             )
+            exists = bool(ref.abs_path and Path(ref.abs_path).exists())
+            suffix = Path(ref.abs_path).suffix if ref.abs_path else ""
+            self._listen_btn.setEnabled(pad_preview_enabled(
+                exists, suffix, self._player.available, self._player.supports_all_formats,
+            ))
+            self._show_sample_btn.setEnabled(ref.abs_path is not None)
         else:
-            self._pad_info.setText(f"Pad {pad_index + 1}\n(Kein Sample zugewiesen)")
+            self._pad_info.setText(f"Pad {pad_index + 1}\nKein Sample zugewiesen")
+            self._listen_btn.setEnabled(False)
+            self._show_sample_btn.setEnabled(False)
+            self._player.stop()
+
+        if not self._player.available:
+            self._listen_btn.setToolTip("sounddevice nicht installiert — pip install sounddevice")
+        elif (
+            ref is not None and ref.abs_path
+            and not self._player.supports_all_formats
+            and Path(ref.abs_path).suffix.lower() != ".wav"
+        ):
+            self._listen_btn.setToolTip("soundfile nicht installiert — pip install soundfile")
+        else:
+            self._listen_btn.setToolTip("")
         self._reassign_btn.setEnabled(True)
+
+    def _listen_pad(self):
+        ref = self._selected_pad_ref()
+        if ref is None or not ref.abs_path:
+            return
+        self._player.play(Path(ref.abs_path))
+
+    def _show_pad_sample(self):
+        ref = self._selected_pad_ref()
+        if ref is None or ref.abs_path is None or not self._index:
+            self._status.setText("Sample liegt nicht im Index.")
+            return
+        target = Path(ref.abs_path)
+        match = None
+        for sample in self._index.samples:
+            if sample.file_path == target:
+                match = sample
+                break
+            try:
+                if sample.file_path.resolve() == target.resolve():
+                    match = sample
+                    break
+            except OSError:
+                continue
+        if match is None:
+            self._status.setText("Sample liegt nicht im Index.")
+            return
+        self.open_path.emit("sample_manager", match.file_path)
+
+    def _change_for(self, path: Path):
+        if self._staging is None:
+            return None
+        for change in self._staging.get_all():
+            if change.file_path == path:
+                return change
+        return None
+
+    def _on_folder_dropped(self, folder: str):
+        if not self._current_kit or not self._index:
+            self._status.setText("Kein Kit ausgewählt.")
+            return
+        kit = self._current_kit
+        existing = self._change_for(kit.file_path)
+        if existing is not None and existing.change_type in (ChangeType.RENAME, ChangeType.DELETE):
+            self._status.setText(
+                "Zuweisung abgebrochen: für dieses Kit liegt schon eine Umbenennung oder Löschung vor."
+            )
+            return
+
+        from ..core.file_ops import _read_xml, copy_file_to_sd
+        from ..core.xml_parser import (
+            assign_folder_to_pads, natural_sort_key, map_kit_pads_to_samples,
+            _parse_xml_robust_text, validate_xml_text, _first_sample_ref_in,
+        )
+
+        if (
+            existing is not None
+            and existing.change_type == ChangeType.XML_EDIT
+            and existing.new_content is not None
+        ):
+            text = existing.new_content
+            enc = existing.encoding or "utf-8"
+            source_module = existing.source_module
+        else:
+            try:
+                text, enc = _read_xml(kit.file_path)
+            except Exception as e:
+                self._status.setText(f"Kit-XML nicht lesbar: {e}")
+                return
+            source_module = "kit_manager"
+
+        folder_path = Path(folder)
+        try:
+            audio = [
+                path for path in folder_path.iterdir()
+                if path.is_file() and path.suffix.lower() in _PAD_AUDIO_EXTENSIONS
+            ]
+        except OSError as e:
+            self._status.setText(f"Ordner nicht lesbar: {e}")
+            return
+        audio.sort(key=lambda path: natural_sort_key(path.name))
+        extra = audio[16:]
+        audio = audio[:16]
+        if not audio:
+            self._status.setText("Keine WAV/AIF-Dateien im Ordner.")
+            return
+
+        root = self._index.root_path
+        rel_by_path = {}
+        outside = []
+        for path in audio:
+            try:
+                rel_by_path[path] = str(path.relative_to(root)).replace("\\", "/")
+            except ValueError:
+                outside.append(path)
+
+        copied_note = ""
+        if outside:
+            folder_name = folder_path.name or "Import"
+            reply = QMessageBox.question(
+                self,
+                "Samples kopieren",
+                f"Audiodateien jetzt nach SAMPLES/{folder_name}/ kopieren, Kit-XML erst beim Speichern.",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                self._status.setText("Abgebrochen. Nichts kopiert, nichts vorgemerkt.")
+                return
+            skipped = []
+            for path in outside:
+                dest = root / "SAMPLES" / folder_name / path.name
+                if dest.exists():
+                    skipped.append(path.name)
+                    continue
+                if copy_file_to_sd(path, dest):
+                    rel_by_path[path] = str(dest.relative_to(root)).replace("\\", "/")
+                else:
+                    skipped.append(path.name)
+            copied_note = " Kopierte WAVs bleiben liegen, wenn du die Änderung verwirfst."
+            if skipped:
+                copied_note += " Übersprungen: " + ", ".join(skipped) + "."
+
+        pad_rels = [rel_by_path.get(path) for path in audio]
+        while len(pad_rels) < 16:
+            pad_rels.append(None)
+
+        parsed = _parse_xml_robust_text(text, context=str(kit.file_path))
+        notes = []
+        if parsed is not None:
+            sounds = parsed.findall(".//sound") or parsed.findall(".//kitRow")
+            for index, rel in enumerate(pad_rels):
+                if not rel:
+                    continue
+                if index >= len(sounds):
+                    notes.append(f"Pad {index + 1} ohne <sound>")
+                    continue
+                has_sample = _first_sample_ref_in(sounds[index], root) is not None
+                has_osc = sounds[index].find(".//osc1") is not None
+                if not has_sample and not has_osc:
+                    notes.append(f"Pad {index + 1} ohne <osc1>")
+
+        new_text = assign_folder_to_pads(text, pad_rels)
+        if new_text == text:
+            detail = (", ".join(notes) + ".") if notes else ""
+            self._status.setText(("Keine Pad-Zuweisung möglich. " + detail).strip() + copied_note)
+            return
+        error = validate_xml_text(new_text, context=str(kit.file_path))
+        if error is not None:
+            self._status.setText(f"Zuweisung abgebrochen: XML wäre ungültig ({error})." + copied_note)
+            return
+        if self._staging is None:
+            self._status.setText("Kein Zwischenspeicher — nichts vorgemerkt." + copied_note)
+            return
+
+        self._staging.add(PendingChange(
+            change_type=ChangeType.XML_EDIT,
+            file_path=kit.file_path,
+            source_module=source_module,
+            new_content=new_text,
+            encoding=enc,
+        ))
+        refreshed = _parse_xml_robust_text(new_text, context=str(kit.file_path))
+        if refreshed is not None:
+            kit.pad_refs = map_kit_pads_to_samples(refreshed, root)
+            self._show_kit_pads(kit)
+            if self._selected_pad is not None:
+                self._on_pad_click(self._selected_pad)
+        self._pending_panel.refresh()
+
+        extra_note = " Nur 16 Pads, Rest ignoriert." if extra else ""
+        skip_note = (" " + ", ".join(notes) + ".") if notes else ""
+        self._status.setText(
+            "Vorgemerkt, noch nicht auf der Karte." + extra_note + skip_note + copied_note
+        )
 
     def _reassign_pad(self):
         if self._selected_pad is None or not self._current_kit or not self._index:

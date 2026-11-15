@@ -5,6 +5,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Genutzt in**: Klick auf einen Eintrag springt zum Song, Kit oder Synth; vom Pad aus lässt sich das Sample im Sample Manager öffnen
+- **Pad anhören**: das Sample eines Kit-Pads über den vorhandenen Player abspielen
+- **Set packen**: ausgewählte Songs und nur die Kits, Synths und Samples, die sie brauchen, in einen anderen Ordner kopieren — die Quellkarte bleibt unverändert
+- **Gleicher Inhalt**: doppelte Samples nach Dateiinhalt finden, verschenkten Platz sehen und zusammenführen — die Karte ändert sich erst beim Speichern
+- **Kit aus Ordner**: einen WAV-Ordner auf das Pad-Grid ziehen und die Dateien der Reihe nach den 16 Pads zuweisen — die Kit-XML bleibt bis zum Speichern unverändert
+- **Firmware**: Songs markieren, deren früheste kompatible Firmware neuer ist als der Rest der Karte
+- **Karte gegen Backup**: ein gewähltes ZIP mit der gescannten Karte vergleichen (neu, fehlt, geändert), ohne etwas zurückzuschreiben
+
+---
+
 ## [2.2.3] — 2026-09-16
 
 ### Added

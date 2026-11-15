@@ -2,8 +2,10 @@
 DelugeHub — File Operations
 All destructive file ops: move, rename, delete samples + auto-update XML references.
 """
-import shutil
+import hashlib
 import logging
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -315,3 +317,129 @@ def copy_file_to_sd(src: Path, dest: Path) -> bool:
     except Exception as e:
         log.error(f"copy_file_to_sd: {e}")
         return False
+
+
+_PATH_BOUNDARIES = set("\"'><")
+
+
+def replace_bounded_sample_path(text: str, old_rel: str, new_rel: str) -> str:
+    """
+    Replace old_rel with new_rel only where the match is a whole path token.
+
+    The character immediately before and after the match must be a quote,
+    '>' or '<'. That keeps SAMPLES/a.wav from rewriting SAMPLES/a.wav.bak,
+    which a plain str.replace would do. Forward- and back-slash spellings
+    of old_rel are both considered. The text is not written anywhere.
+    """
+    if text is None:
+        return text
+
+    def _one(src: str, old: str, new: str) -> str:
+        if not old or old == new:
+            return src
+        parts = []
+        i = 0
+        n = len(src)
+        while i < n:
+            j = src.find(old, i)
+            if j < 0:
+                parts.append(src[i:])
+                break
+            end = j + len(old)
+            before_ok = j > 0 and src[j - 1] in _PATH_BOUNDARIES
+            after_ok = end < n and src[end] in _PATH_BOUNDARIES
+            if before_ok and after_ok:
+                parts.append(src[i:j])
+                parts.append(new)
+                i = end
+            else:
+                parts.append(src[i:j + 1])
+                i = j + 1
+        return "".join(parts)
+
+    old_fwd = old_rel.replace("\\", "/")
+    new_fwd = new_rel.replace("\\", "/")
+    old_bwd = old_rel.replace("/", "\\")
+    new_bwd = new_rel.replace("/", "\\")
+    text = _one(text, old_fwd, new_fwd)
+    if old_bwd != old_fwd:
+        text = _one(text, old_bwd, new_bwd)
+    return text
+
+
+@dataclass
+class IdenticalSampleGroup:
+    """Samples whose bytes match. wasted_bytes is every copy except the largest."""
+    members: list
+    wasted_bytes: int
+
+
+def _sha256_file(path: Path) -> Optional[str]:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as e:
+        log.warning("SHA-256 fehlgeschlagen für %s: %s", path, e)
+        return None
+    return digest.hexdigest()
+
+
+def identical_sample_groups(samples: list) -> list:
+    """
+    Group samples that share the same size and the same SHA-256.
+
+    Only sizes that occur more than once are hashed. A group is returned
+    only when at least two different paths remain. wasted_bytes is the sum
+    of the sizes minus the largest file (one copy kept).
+    """
+    by_size: dict = {}
+    for sample in samples:
+        size = int(getattr(sample, "size_bytes", 0) or 0)
+        path = getattr(sample, "file_path", None)
+        if path is None or size < 0:
+            continue
+        by_size.setdefault(size, []).append(sample)
+
+    groups = []
+    for size, members in by_size.items():
+        if len(members) < 2:
+            continue
+        by_hash: dict = {}
+        for sample in members:
+            digest = _sha256_file(Path(sample.file_path))
+            if digest is None:
+                continue
+            by_hash.setdefault(digest, []).append(sample)
+        for hashed in by_hash.values():
+            unique = []
+            seen = set()
+            for sample in hashed:
+                key = str(Path(sample.file_path))
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(sample)
+            if len(unique) < 2:
+                continue
+            total = sum(int(getattr(s, "size_bytes", 0) or 0) for s in unique)
+            largest = max(int(getattr(s, "size_bytes", 0) or 0) for s in unique)
+            groups.append(IdenticalSampleGroup(members=unique, wasted_bytes=total - largest))
+    return groups
+
+
+def preferred_keep_index(members: list) -> int:
+    """
+    Index of the file to keep: most referenced_by entries, ties keep the
+    earlier index (the first one in the scan).
+    """
+    best = 0
+    best_key = None
+    for i, sample in enumerate(members):
+        refs = getattr(sample, "referenced_by", None) or []
+        key = (len(refs), -i)
+        if best_key is None or key > best_key:
+            best_key = key
+            best = i
+    return best
