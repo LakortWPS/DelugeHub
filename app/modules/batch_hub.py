@@ -26,6 +26,7 @@ from ..core.volume_utils import (
     vol_to_display as _vol_to_display, display_to_vol as _display_to_vol,
     apply_sequential_replacements,
 )
+from ..widgets.table_sort import TableSort, original_row_index
 
 log = logging.getLogger(__name__)
 
@@ -526,7 +527,7 @@ class BatchHubModule(QWidget):
                 if not data_cell:
                     continue
                 itm = data_cell.data(Qt.UserRole)
-                abs_idx = (start - 1) + row
+                abs_idx = (start - 1) + original_row_index(item_table, row)
                 stem = _compute_rename(schema, extra, itm.name, abs_idx)
                 new_name = stem if stem.lower().endswith(".xml") else stem + ".XML"
                 prev_cell = item_table.item(row, 2)
@@ -556,6 +557,7 @@ class BatchHubModule(QWidget):
         item_table.setColumnWidth(0, 30)
         item_table.setColumnHidden(2, False)
         item_table.setAlternatingRowColors(True)
+        widget._table_sort = TableSort(item_table, {1: "text", 2: "text"})
         layout.addWidget(item_table, 1)
 
         # Referenzen + Initialzustand (item_table muss vorher existieren)
@@ -599,7 +601,12 @@ class BatchHubModule(QWidget):
                 chk = item_table.item(row, 0)
                 data_item = item_table.item(row, 1)
                 if chk and chk.checkState() == Qt.Checked and data_item:
-                    selected.append(data_item.data(Qt.UserRole))
+                    selected.append((
+                        original_row_index(item_table, row),
+                        data_item.data(Qt.UserRole),
+                    ))
+            selected.sort(key=lambda pair: pair[0])
+            selected = [item for _, item in selected]
             if not selected:
                 QMessageBox.information(widget, "Info", "Keine Einträge ausgewählt.")
                 return
@@ -773,6 +780,7 @@ class BatchHubModule(QWidget):
                     name_item.setData(Qt.UserRole, item)
                     table.setItem(row, 1, name_item)
                     table.setItem(row, 2, QTableWidgetItem(""))
+                tab._table_sort.note_original_order()
                 # Preview nach Neubefüllung aktualisieren
                 if hasattr(tab, "_update_preview"):
                     tab._update_preview()

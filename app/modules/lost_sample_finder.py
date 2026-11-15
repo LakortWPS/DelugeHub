@@ -20,6 +20,7 @@ from ..core.lost_finder import (
     MissingRef, collect_missing_refs, auto_match_all, search_folder_for_missing
 )
 from ..core.file_ops import fix_xml_path, update_xml_path
+from ..widgets.table_sort import TableSort
 
 log = logging.getLogger(__name__)
 
@@ -220,6 +221,14 @@ class LostSampleFinderModule(QWidget):
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._context_menu)
         self._table.doubleClicked.connect(self._manual_fix_row)
+        self._table_sort = TableSort(self._table, {
+            COL_TYPE: "text",
+            COL_XML: "text",
+            COL_MISSING: "text",
+            COL_MATCH: "text",
+            COL_CONF: "text",
+            COL_STATUS: "text",
+        })
         root.addWidget(self._table, 1)
 
         # Bottom progress + stats
@@ -275,6 +284,7 @@ class LostSampleFinderModule(QWidget):
         self._table.setRowCount(0)
         for ref in refs:
             self._add_row(ref)
+        self._table_sort.note_original_order()
         self._update_apply_button()
 
     def _add_row(self, ref: MissingRef):

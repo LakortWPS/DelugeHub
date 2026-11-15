@@ -381,6 +381,13 @@ class SampleManagerModule(QWidget):
         self._table.doubleClicked.connect(self._play_selected)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._context_menu)
+        self._table_sort = TableSort(self._table, {
+            0: "text",    # Name
+            1: "text",    # Pfad
+            2: "size",    # Größe
+            3: "number",  # Genutzt von
+            4: "text",    # Format
+        })
         splitter.addWidget(self._table)
 
         # Detail panel
@@ -602,6 +609,7 @@ class SampleManagerModule(QWidget):
             self._table.setItem(row, 4, QTableWidgetItem(ext))
 
         self._filter_table()
+        self._table_sort.note_original_order()
 
     def _filter_table(self):
         text = self._search.text().lower()

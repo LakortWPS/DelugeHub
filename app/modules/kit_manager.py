@@ -24,6 +24,7 @@ from ..core.volume_utils import (
     vol_to_display, display_to_vol, vol_to_amp, amp_to_vol,
     apply_sequential_replacements,
 )
+from ..widgets.table_sort import TableSort
 
 log = logging.getLogger(__name__)
 
@@ -271,6 +272,11 @@ class KitManagerModule(QWidget):
         self._table.setColumnWidth(2, 80)
         self._table.setMinimumWidth(240)
         self._table.itemSelectionChanged.connect(self._on_kit_selected)
+        self._table_sort = TableSort(self._table, {
+            0: "text",
+            1: "number",
+            2: "number",
+        })
         splitter.addWidget(self._table)
 
         # Right panel: pad grid + pad detail
@@ -418,6 +424,7 @@ class KitManagerModule(QWidget):
             else:
                 missing_item.setForeground(QColor("#2ECC71"))
             self._table.setItem(row, 2, missing_item)
+        self._table_sort.note_original_order()
 
     def _filter(self):
         text = self._search.text().lower()

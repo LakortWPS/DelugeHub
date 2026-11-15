@@ -197,6 +197,13 @@ class SongManagerModule(QWidget):
         self._table.setColumnWidth(COL_SIZE, 75)
         self._table.setColumnWidth(COL_FW, 80)
         self._table.itemSelectionChanged.connect(self._on_selection)
+        self._table_sort = TableSort(self._table, {
+            COL_NAME: "text",
+            COL_BPM: "number",
+            COL_TRACKS: "number",
+            COL_MISSING: "number",
+            COL_SIZE: "size",
+        })
         splitter.addWidget(self._table)
 
         # Detail panel

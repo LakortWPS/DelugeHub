@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
 from ..core.models import SDCardIndex, Synth
+from ..widgets.table_sort import TableSort
 
 log = logging.getLogger(__name__)
 
@@ -167,6 +168,11 @@ class SynthEditorModule(QWidget):
         self._table.setColumnWidth(2, 70)
         self._table.setMinimumWidth(220)
         self._table.setMaximumWidth(300)
+        self._table_sort = TableSort(self._table, {
+            0: "text",
+            1: "text",
+            2: "text",
+        })
         self._table.itemSelectionChanged.connect(self._on_synth_selected)
         splitter.addWidget(self._table)
 
@@ -338,6 +344,7 @@ class SynthEditorModule(QWidget):
             self._table.setItem(row, 0, name_item)
             self._table.setItem(row, 1, QTableWidgetItem(s.osc1_type))
             self._table.setItem(row, 2, QTableWidgetItem(s.filter_type))
+        self._table_sort.note_original_order()
 
     def _filter(self):
         text = self._search.text().lower()
