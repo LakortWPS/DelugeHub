@@ -86,6 +86,19 @@ def test_guard_is_per_file_not_batch_wide(tmp_path):
     assert changes[0].file_path == stays_valid
 
 
+def test_missing_close_tag_is_not_staged(tmp_path):
+    f = tmp_path / "a.XML"
+    original = '<sound><osc1><fileName>SAMPLES/OLD.wav</fileName></osc1></sound>'
+    f.write_text(original, encoding="utf-8")
+
+    # Dropping the inner close tag leaves text the recovery parser would
+    # still accept, but the strict gate must refuse to stage it.
+    changes = plan_global_replace([f], "</osc1>", "")
+
+    assert changes == []
+    assert f.read_text(encoding="utf-8") == original
+
+
 def test_normal_path_rename_replace_is_unaffected(tmp_path):
     f = tmp_path / "a.XML"
     f.write_text(

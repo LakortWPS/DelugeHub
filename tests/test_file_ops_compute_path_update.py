@@ -98,6 +98,23 @@ def test_update_xml_path_writes_same_content_as_compute(tmp_path):
     assert f.read_text(encoding=enc) == expected_text
 
 
+def test_whole_file_replace_does_not_touch_a_longer_filename(tmp_path):
+    f = tmp_path / "kit.XML"
+    original = (
+        '<sound><osc1 fileName="SAMPLES/KICK/kick.wav2"></osc1></sound>'
+        '<sound><osc1 fileName="SAMPLES/KICK/kick.wav"></osc1></sound>'
+    )
+    f.write_text(original, encoding="utf-8")
+
+    result = compute_xml_path_update(f, "SAMPLES/KICK/kick.wav", "SAMPLES/SNARE/snare.wav")
+
+    assert result is not None
+    new_text, _enc = result
+    assert 'fileName="SAMPLES/KICK/kick.wav2"' in new_text
+    assert 'fileName="SAMPLES/SNARE/snare.wav"' in new_text
+    assert "kick.wav\"" not in new_text.replace("kick.wav2", "")
+
+
 def test_update_xml_path_returns_false_when_no_match(tmp_path):
     f = tmp_path / "kit.XML"
     original = '<sound><osc1 fileName="SAMPLES/SNARE/x.wav"></osc1></sound>'

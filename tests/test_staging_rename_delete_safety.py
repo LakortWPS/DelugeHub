@@ -69,10 +69,10 @@ def test_batch_rename_collision_is_blocked_and_files_untouched(tmp_path):
     store.add(PendingChange(ChangeType.RENAME, src_a, "kit_manager", new_name="MyKit.XML"))
     store.add(PendingChange(ChangeType.RENAME, src_b, "kit_manager", new_name="MyKit.XML"))
 
-    success, failed = store.apply_all()
+    report = store.apply_all()
 
-    assert success == 0
-    assert failed == 2
+    assert report.success == 0
+    assert report.failed == 2
     # Neither source file was touched or lost.
     assert src_a.read_text(encoding="utf-8") == "AAA"
     assert src_b.read_text(encoding="utf-8") == "BBB"
@@ -86,10 +86,10 @@ def test_rename_onto_existing_file_is_blocked(tmp_path):
     store = StagingStore()
     store.add(PendingChange(ChangeType.RENAME, src, "kit_manager", new_name="KIT001.XML"))
 
-    success, failed = store.apply_all()
+    report = store.apply_all()
 
-    assert success == 0
-    assert failed == 1
+    assert report.success == 0
+    assert report.failed == 1
     assert src.exists()
     assert src.read_text(encoding="utf-8") == "SOURCE"
     # The pre-existing file must survive with its original content.
@@ -102,10 +102,10 @@ def test_rename_without_collision_still_succeeds(tmp_path):
     store = StagingStore()
     store.add(PendingChange(ChangeType.RENAME, src, "kit_manager", new_name="RenamedKit.XML"))
 
-    success, failed = store.apply_all()
+    report = store.apply_all()
 
-    assert success == 1
-    assert failed == 0
+    assert report.success == 1
+    assert report.failed == 0
     assert not src.exists()
     assert (tmp_path / "RenamedKit.XML").read_text(encoding="utf-8") == "SOURCE"
 
@@ -130,10 +130,10 @@ def test_delete_moves_file_to_trash_instead_of_destroying_it(tmp_path, monkeypat
     store = staging2.StagingStore()
     store.add(staging2.PendingChange(staging2.ChangeType.DELETE, target, "kit_manager"))
 
-    success, failed = store.apply_all()
+    report = store.apply_all()
 
-    assert success == 1
-    assert failed == 0
+    assert report.success == 1
+    assert report.failed == 0
     assert not target.exists()
 
     trashed = list(trash_root.glob("KIT000*"))

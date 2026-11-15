@@ -8,6 +8,8 @@ Deluge speichert Lautstärken als vorzeichenbehaftete 32-Bit-Integer in Hex:
     display 50    =  0x7FFFFFFF  (Maximum)
     display  0    =  0x80000000  (Minimum / Stille)
 """
+import re
+from typing import Optional
 
 
 def vol_to_display(hex_str: str) -> float:
@@ -40,32 +42,91 @@ def amp_to_vol(amp: float) -> str:
     return f"0x{v & 0xFFFFFFFF:08X}"
 
 
-def apply_sequential_replacements(text: str, replacements: list[tuple[str, str]]) -> tuple[str, int]:
-    """
-    Apply each (old, new) pair in `replacements` to `text`, one occurrence
-    each, in the given order — never searching before the position where
-    the previous replacement landed.
+# <sound> but not <soundSources>. </sound> but not </soundSources>.
+_SOUND_OPEN_RE = re.compile(r"<sound(?=[\s>/])")
+_SOUND_CLOSE_RE = re.compile(r"</sound(?=\s*>)")
 
-    Several pads/clips in the same Kit/Song XML can share the exact same
-    literal volume tag text (e.g. an untouched default value repeated on
-    multiple pads). A plain `text.replace(old, new, 1)` call always hits
-    the FIRST occurrence in the whole text, so calling it once per pad
-    without tracking where earlier edits already landed can silently
-    rewrite the wrong pad's volume. Anchoring the search position after
-    each match keeps every replacement scoped to "the next not-yet-
-    consumed occurrence", matching the left-to-right document order the
-    caller collected `replacements` in (i.e. the same order as
-    `soundSources.findall("sound")`/etc.).
 
-    Returns the modified text and how many replacements actually matched.
+def _sound_spans(block: str) -> list[tuple[int, int]]:
+    """Top-level <sound>…</sound> spans, in document order."""
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while True:
+        match = _SOUND_OPEN_RE.search(block, pos)
+        if match is None:
+            break
+        depth = 1
+        i = match.end()
+        found_end = None
+        while depth > 0:
+            nxt_open = _SOUND_OPEN_RE.search(block, i)
+            nxt_close = _SOUND_CLOSE_RE.search(block, i)
+            if nxt_close is None:
+                break
+            if nxt_open is not None and nxt_open.start() < nxt_close.start():
+                depth += 1
+                i = nxt_open.end()
+            else:
+                depth -= 1
+                i = nxt_close.end()
+                if depth == 0:
+                    found_end = i
+        if found_end is None:
+            break
+        spans.append((match.start(), found_end))
+        pos = found_end
+    return spans
+
+
+def _default_params_region(block: str, start: int, end: int) -> Optional[tuple[int, int]]:
+    """The <defaultParams> element inside [start, end), including its body."""
+    rel = block.find("<defaultParams", start, end)
+    if rel < 0:
+        return None
+    gt = block.find(">", rel, end)
+    if gt < 0:
+        return None
+    if block[gt - 1] == "/":
+        return rel, gt + 1
+    close = block.find("</defaultParams>", gt, end)
+    if close < 0:
+        return rel, gt + 1
+    return rel, close + len("</defaultParams>")
+
+
+def replace_default_params_volumes(
+    sources_block: str,
+    updates: list[Optional[tuple[str, str]]],
+) -> tuple[str, int]:
     """
+    Apply volume edits inside each sound's own <defaultParams>, in the same
+    order as soundSources.findall("sound").
+
+    updates[i] is None when that sound must stay untouched (missing sample,
+    already at the target, under the cap). A tuple is the literal to find
+    and the literal to write, and it is searched only inside that sound's
+    defaultParams element — an earlier sound that shares the same hex is
+    not a candidate.
+
+    Returns the modified block and how many sounds actually changed.
+    """
+    spans = _sound_spans(sources_block)
+    text = sources_block
     changed = 0
-    search_pos = 0
-    for old, new in replacements:
-        idx = text.find(old, search_pos)
-        if idx == -1:
+    last = min(len(spans), len(updates)) - 1
+    for i in range(last, -1, -1):
+        update = updates[i]
+        if not update:
             continue
-        text = text[:idx] + new + text[idx + len(old):]
-        search_pos = idx + len(new)
+        old, new = update
+        region = _default_params_region(text, spans[i][0], spans[i][1])
+        if region is None:
+            continue
+        ra, rb = region
+        segment = text[ra:rb]
+        idx = segment.find(old)
+        if idx < 0:
+            continue
+        text = text[: ra + idx] + new + text[ra + idx + len(old) :]
         changed += 1
     return text, changed

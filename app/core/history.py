@@ -18,6 +18,7 @@ Usage pattern in each module:
         ))
 """
 import itertools
+import json
 import shutil
 import logging
 from pathlib import Path
@@ -143,20 +144,77 @@ def trash_dir() -> Path:
     return d
 
 
+_TRASH_INDEX = "index.json"
+
+
+def _trash_index_path() -> Path:
+    return trash_dir() / _TRASH_INDEX
+
+
+def _load_trash_index() -> dict:
+    path = _trash_index_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_trash_index(data: dict) -> None:
+    _trash_index_path().write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def move_to_trash(path: Path) -> Path:
     """
     Move *path* into the trash folder and return the trash path.
     The trash path is needed to restore the file on Undo.
     Uses a unique suffix to avoid collisions.
+    The original path is recorded in the trash index so a later session
+    can offer Restore without the in-memory undo stack.
     """
+    original = path
     dest = trash_dir() / f"{path.stem}_{next(_trash_counter):08d}{path.suffix}"
     shutil.move(str(path), str(dest))
+    try:
+        index = _load_trash_index()
+        index[dest.name] = str(original)
+        _save_trash_index(index)
+    except OSError as e:
+        log.warning("Trash-Index nicht geschrieben (%s): %s", dest.name, e)
     log.debug(f"Trashed: {path.name} → {dest.name}")
     return dest
 
 
+def list_trashed() -> list[tuple[Path, Optional[Path]]]:
+    """
+    Files currently in the trash folder.
+    Each item is (trash_path, original_path or None when the index has no entry).
+    """
+    folder = trash_dir()
+    index = _load_trash_index()
+    items: list[tuple[Path, Optional[Path]]] = []
+    for path in sorted(folder.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not path.is_file() or path.name == _TRASH_INDEX:
+            continue
+        raw = index.get(path.name)
+        items.append((path, Path(raw) if raw else None))
+    return items
+
+
 def restore_from_trash(trash_path: Path, original_path: Path):
     """Move a trashed file back to its original location."""
+    if original_path.exists():
+        raise FileExistsError(f"Zieldatei existiert bereits: {original_path}")
     original_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(trash_path), str(original_path))
+    try:
+        index = _load_trash_index()
+        index.pop(trash_path.name, None)
+        _save_trash_index(index)
+    except OSError as e:
+        log.warning("Trash-Index nicht aktualisiert (%s): %s", trash_path.name, e)
     log.debug(f"Restored: {trash_path.name} → {original_path}")

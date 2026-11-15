@@ -1,7 +1,7 @@
 # DelugeHub — Projektstand
 
-**Stand:** 2026-09-16  
-**Version:** 2.2.3 (Branch: `main`)
+**Stand:** 2026-11-12  
+**Version:** 2.2.3 (Änderungen seit dem Review noch nicht released, siehe CHANGELOG Unreleased)
 
 ---
 
@@ -112,7 +112,7 @@ Alle destruktiven Operationen (XML-Edit, Rename, Delete) werden jetzt gepuffert 
 
 ## Offene Punkte / Nächste Schritte
 
-Aktuell keine bekannten offenen Punkte aus früheren Audits — die drei oben genannten wurden mit Stand 2026-09-16 verifiziert und sind erledigt. Neue offene Punkte hier eintragen, sobald sie identifiziert sind.
+Keine offenen Punkte aus dem Review vom 2026-11-12. Neue Punkte hier eintragen, sobald sie identifiziert sind.
 
 ---
 

@@ -24,7 +24,7 @@ from ..core.models import SDCardIndex
 from ..core.staging import StagingStore, PendingChange, ChangeType
 from ..core.volume_utils import (
     vol_to_display as _vol_to_display, display_to_vol as _display_to_vol,
-    apply_sequential_replacements,
+    replace_default_params_volumes,
 )
 from ..widgets.table_sort import TableSort, original_row_index
 
@@ -186,10 +186,22 @@ class BatchWorker(QThread):
         dest_dir = Path(self.params.get("dest_dir", "."))
         shutil.copy2(str(item.file_path), str(dest_dir / item.file_path.name))
 
+    def _load_text(self, path: Path) -> tuple[str, str]:
+        """Staged body from params['base_texts'] when the UI snapshotted one."""
+        from ..core.file_ops import _read_xml
+        bases = self.params.get("base_texts") or {}
+        key = str(path)
+        if key in bases:
+            try:
+                _, enc = _read_xml(path)
+            except Exception:
+                enc = "utf-8"
+            return bases[key], enc
+        return _read_xml(path)
+
     def _do_normalize(self, item) -> Optional[PendingChange]:
         """Setzt alle Pad-Volumes (nur innerhalb <soundSources>) auf Maximum."""
-        from ..core.file_ops import _read_xml
-        text, enc = _read_xml(item.file_path)
+        text, enc = self._load_text(item.file_path)
 
         sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
         if not sources_match:
@@ -213,11 +225,11 @@ class BatchWorker(QThread):
 
     def _do_cap_kit_master(self, item) -> Optional[PendingChange]:
         """Begrenzt Kit-Master-Volume auf params['threshold']."""
-        from ..core.xml_parser import _parse_xml_robust
-        from ..core.file_ops import _read_xml
+        from ..core.xml_parser import _parse_xml_robust_text
         threshold = self.params.get("threshold", 40)
 
-        root = _parse_xml_robust(item.file_path)
+        text, enc = self._load_text(item.file_path)
+        root = _parse_xml_robust_text(text, context=str(item.file_path))
         if root is None:
             return None
         dp = root.find("defaultParams")
@@ -235,7 +247,6 @@ class BatchWorker(QThread):
             return None
 
         new_hex = _display_to_vol(threshold)
-        text, enc = _read_xml(item.file_path)
 
         sources_pos = text.find('<soundSources>')
         pre_block  = text[:sources_pos] if sources_pos >= 0 else text
@@ -260,21 +271,22 @@ class BatchWorker(QThread):
 
     def _do_cap_pad_volumes(self, item) -> Optional[PendingChange]:
         """Begrenzt alle Pad-Volumes im Kit auf params['threshold']."""
-        from ..core.xml_parser import _parse_xml_robust
-        from ..core.file_ops import _read_xml
+        from ..core.xml_parser import _parse_xml_robust_text
         threshold = self.params.get("threshold", 40)
 
-        root = _parse_xml_robust(item.file_path)
+        text, enc = self._load_text(item.file_path)
+        root = _parse_xml_robust_text(text, context=str(item.file_path))
         if root is None:
             return None
         sound_sources = root.find("soundSources")
         if sound_sources is None:
             return None
 
-        caps = []
+        updates = []
         for sound in sound_sources.findall("sound"):
             dp = sound.find("defaultParams")
             if dp is None:
+                updates.append(None)
                 continue
             vol_str = dp.get("volume", "").strip()
             vol_format = "attr"
@@ -284,24 +296,26 @@ class BatchWorker(QThread):
                     vol_str = (vol_elem.text or "").strip()
                     vol_format = "elem"
             if vol_str and _vol_to_display(vol_str) > threshold:
-                caps.append((vol_str, _display_to_vol(threshold), vol_format))
+                new_hex = _display_to_vol(threshold)
+                if vol_format == "attr":
+                    updates.append((f'volume="{vol_str}"', f'volume="{new_hex}"'))
+                else:
+                    updates.append((
+                        f'<volume>{vol_str}</volume>',
+                        f'<volume>{new_hex}</volume>',
+                    ))
+            else:
+                updates.append(None)
 
-        if not caps:
+        if not any(updates):
             return None
 
-        text, enc = _read_xml(item.file_path)
         sources_match = re.search(r'<soundSources>(.*?)</soundSources>', text, re.DOTALL)
         if not sources_match:
             return None
 
         block = sources_match.group(1)
-        replacements = []
-        for current_hex, new_hex, fmt in caps:
-            if fmt == "attr":
-                replacements.append((f'volume="{current_hex}"', f'volume="{new_hex}"'))
-            else:
-                replacements.append((f'<volume>{current_hex}</volume>', f'<volume>{new_hex}</volume>'))
-        block, _changed = apply_sequential_replacements(block, replacements)
+        block, _changed = replace_default_params_volumes(block, updates)
 
         s, e = sources_match.start(1), sources_match.end(1)
         new_text = text[:s] + block + text[e:]
@@ -317,10 +331,9 @@ class BatchWorker(QThread):
 
     def _do_cap_clip_volumes(self, item) -> Optional[PendingChange]:
         """Begrenzt alle Clip-Volumes (kitParams/synthParams) im Song auf params['threshold']."""
-        from ..core.file_ops import _read_xml
         threshold = self.params.get("threshold", 40)
 
-        text, enc = _read_xml(item.file_path)
+        text, enc = self._load_text(item.file_path)
 
         def cap_vol(m):
             if _vol_to_display(m.group(2)) > threshold:
@@ -351,6 +364,7 @@ class BatchHubModule(QWidget):
         self._index: Optional[SDCardIndex] = None
         self._worker = None
         self._staging: Optional[StagingStore] = None
+        self._history = None
         self._build_ui()
 
     def _build_ui(self):
@@ -749,6 +763,11 @@ class BatchHubModule(QWidget):
             self._pending_panel._staging = staging
             self._pending_panel.refresh()
 
+    def set_history(self, history):
+        self._history = history
+        if hasattr(self, "_pending_panel"):
+            self._pending_panel.set_history(history)
+
     def update_index(self, index: SDCardIndex):
         self._index = index
         unused = len(index.unused_samples)
@@ -835,6 +854,14 @@ class BatchHubModule(QWidget):
 
         self._progress.setVisible(True)
         self._progress.setValue(0)
+
+        if self._staging is not None:
+            base_texts = {}
+            for item in items:
+                peeked = self._staging.peek(item.file_path)
+                if peeked is not None:
+                    base_texts[str(item.file_path)] = peeked
+            params["base_texts"] = base_texts
 
         self._worker = BatchWorker(items, op, params)
         self._worker.progress.connect(lambda p, m: (self._progress.setValue(p), self._status.setText(m)))
@@ -1018,7 +1045,7 @@ class BatchHubModule(QWidget):
             self._validate_result.setStyleSheet("color: #2ECC71; font-size: 12px;")
 
     def _confirm_global_replace(self, find_text: str, replace_text: str,
-                                  preview: list) -> bool:
+                                  preview: list, rejections: Optional[list] = None) -> bool:
         """Show a preview dialog listing affected files + match count per
         file before any staging/writing happens. Returns True if the user
         confirms."""
@@ -1028,16 +1055,29 @@ class BatchHubModule(QWidget):
         dialog.setWindowTitle("Globales Ersetzen — Vorschau")
         layout = QVBoxLayout(dialog)
 
+        skip_line = ""
+        if rejections:
+            skip_line = (
+                f"\n{len(rejections)} davon werden übersprungen "
+                "(Ergebnis wäre kein gültiges XML):"
+            )
         header = QLabel(
             f"'{find_text}' → '{replace_text}'\n"
             f"{len(preview)} Datei(en) betroffen, {total} Treffer insgesamt:"
+            f"{skip_line}"
         )
         header.setWordWrap(True)
         layout.addWidget(header)
 
+        rejected = {path: err for path, err in (rejections or [])}
         list_widget = QListWidget()
         for file_path, count in preview:
-            list_widget.addItem(f"{file_path.name}  —  {count} Treffer")
+            if file_path in rejected:
+                list_widget.addItem(
+                    f"übersprungen  {file_path.name}  —  {rejected[file_path]}"
+                )
+            else:
+                list_widget.addItem(f"{file_path.name}  —  {count} Treffer")
         layout.addWidget(list_widget)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -1071,14 +1111,17 @@ class BatchHubModule(QWidget):
                     seen_xml2.add(f)
                     xml_files.append(f)
 
-        from ..core.staging import plan_global_replace, preview_global_replace
+        from ..core.staging import (
+            plan_global_replace, preview_global_replace, global_replace_rejections,
+        )
         preview = preview_global_replace(xml_files, find_text)
 
         if not preview:
             self._status.setText("ℹ  Keine Treffer — keine Datei geändert.")
             return
 
-        if not self._confirm_global_replace(find_text, replace_text, preview):
+        rejections = global_replace_rejections(xml_files, find_text, replace_text)
+        if not self._confirm_global_replace(find_text, replace_text, preview, rejections):
             return
 
         changes = plan_global_replace(xml_files, find_text, replace_text)

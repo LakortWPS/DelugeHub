@@ -4,7 +4,7 @@ DelugeHub — Settings Module
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFrame, QFileDialog, QComboBox, QCheckBox,
-    QScrollArea
+    QScrollArea, QListWidget, QListWidgetItem, QMessageBox,
 )
 from PySide6.QtCore import Qt, Signal
 from pathlib import Path
@@ -112,6 +112,32 @@ class SettingsModule(QWidget):
 
         layout.addWidget(scan_card)
 
+        # --- Trash ---
+        layout.addWidget(self._section("PAPIERKORB"))
+        trash_card = self._make_card()
+        trash_layout = QVBoxLayout(trash_card)
+        trash_layout.setContentsMargins(16, 14, 16, 14)
+        trash_layout.setSpacing(8)
+        hint = QLabel("Gelöschte Kits, Songs und Samples. Wiederherstellen bricht ab, wenn die Zieldatei schon existiert.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #888888;")
+        trash_layout.addWidget(hint)
+        self._trash_list = QListWidget()
+        self._trash_list.setMaximumHeight(160)
+        trash_layout.addWidget(self._trash_list)
+        trash_btns = QHBoxLayout()
+        refresh_trash = QPushButton("Aktualisieren")
+        refresh_trash.setObjectName("SecondaryButton")
+        refresh_trash.clicked.connect(self._refresh_trash)
+        restore_trash = QPushButton("Wiederherstellen")
+        restore_trash.clicked.connect(self._restore_selected_trash)
+        trash_btns.addWidget(refresh_trash)
+        trash_btns.addWidget(restore_trash)
+        trash_btns.addStretch()
+        trash_layout.addLayout(trash_btns)
+        layout.addWidget(trash_card)
+        self._refresh_trash()
+
         # --- About ---
         layout.addWidget(self._section("ÜBER"))
         about_card = self._make_card()
@@ -153,6 +179,51 @@ class SettingsModule(QWidget):
         if path:
             self._settings["sd_path"] = path
             self.sd_path_changed.emit(path)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._refresh_trash()
+
+    def _refresh_trash(self):
+        from ..core.history import list_trashed
+        self._trash_list.clear()
+        try:
+            entries = list_trashed()
+        except OSError:
+            entries = []
+        for trash_path, original in entries:
+            if original is None:
+                label = f"{trash_path.name}  —  Originalpfad unbekannt"
+            else:
+                label = f"{original.name}  →  {original}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, (str(trash_path), str(original) if original else ""))
+            self._trash_list.addItem(item)
+        if self._trash_list.count() == 0:
+            self._trash_list.addItem("(leer)")
+
+    def _restore_selected_trash(self):
+        from ..core.history import restore_from_trash
+        item = self._trash_list.currentItem()
+        data = item.data(Qt.UserRole) if item is not None else None
+        if not data or not data[1]:
+            QMessageBox.information(
+                self, "Papierkorb", "Keine wiederherstellbare Datei ausgewählt."
+            )
+            return
+        trash_path, original = Path(data[0]), Path(data[1])
+        if original.exists():
+            QMessageBox.warning(
+                self, "Papierkorb",
+                f"Zieldatei existiert bereits:\n{original}",
+            )
+            return
+        try:
+            restore_from_trash(trash_path, original)
+        except Exception as e:
+            QMessageBox.warning(self, "Papierkorb", str(e))
+            return
+        self._refresh_trash()
 
     def _on_auto_scan_toggled(self, checked: bool):
         self._settings["auto_scan"] = checked
